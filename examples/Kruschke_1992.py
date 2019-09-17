@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright 2019 The PsiZ Authors. All Rights Reserved.
+# Copyright 2019 The PsiXy Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,21 +14,20 @@
 # limitations under the License.
 # ==============================================================================
 
-"""Module for category learning trials.
+"""Reproduce Figure 5 from Kruschke, 1992.
 
-Classes:
-    TODO: Abstract class for similarity judgment trials.
-    TODO: ...
-    TODO: ...
-
-Functions:
-    TODO: ...
-    TODO: ...
-
-Notes:
-
-Todo:
+References:
+    [1] Kruschke, J. K. (1992). ALCOVE: an exemplar-based connectionist model
+        of category learning. Psychological review, 99(1), 22-44.
+        http://dx.doi.org/10.1037/0033-295X.99.1.22.
 
 """
 
-from abc import ABCMeta, abstractmethod
+
+def main():
+    """Execute script."""
+    x = 1
+
+
+if __name__ == "__main__":
+    main()
