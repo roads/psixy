@@ -28,6 +28,7 @@ Functions:
     pad_trials: Pad trials.
 
 Todo:
+    * add setter for StimulusSequence.z
     * Allow for list of lists in response times?
 
 """
@@ -64,15 +65,18 @@ class StimulusSequence(TrialSequence):
     """Class for storing a stimulus sequence."""
 
     def __init__(
-            self, z, class_id, is_real=None, is_feedback=None,
-            stimulus_id=None, trial_type=None):
+            self, stimulus_id, class_id, z=None, is_real=None,
+            is_feedback=None, trial_type=None):
         """Initialize.
 
         Arguments:
-            z: A feature representation.
-                shape=(n_sequence, n_trial, n_feature)
+            stimulus_id: A unique identifier denoting a particular
+                stimulus.
+                shape = (n_sequence, n_trial)
             class_id: The correct class ID of the stimulus.
                 shape = (n_sequence, n_trial)
+            z: A feature representation (optional).
+                shape=(n_sequence, n_trial, n_feature)
             is_real (optional): A boolean array indicating which trials
                 are filled with real data.
                 shape = (n_sequence, n_trial)
@@ -80,19 +84,22 @@ class StimulusSequence(TrialSequence):
                 trial provides feedback. By default, all trials are
                 assumed to provide feedback.
                 shape = (n_sequence, n_trial)
-            stimulus_id (optional):
-                shape = (n_sequence, n_trial)
             trial_type (optional): An array of integers indicating the
                 type of trial. This information is useful for grabbing
                 subsets of the sequence.
                 shape = (n_sequence, n_trial)
         """
-        self.z = self._check_z(z)
-        self.n_sequence = self.z.shape[0]
-        self.n_trial = self.z.shape[1]
-        self.n_dim = self.z.shape[2]
+        self.stimulus_id = self._check_stimulus_id(stimulus_id)
+        self.n_sequence = self.stimulus_id.shape[0]
+        self.n_trial = self.stimulus_id.shape[1]
 
         self.class_id = self._check_class_id(class_id)
+
+        if z is not None:
+            self.z = self._check_z(z)
+            self.n_dim = self.z.shape[2]
+        else:
+            self.n_dim = None
 
         if is_real is None:
             is_real = np.ones([self.n_sequence, self.n_trial], dtype=bool)
@@ -106,37 +113,10 @@ class StimulusSequence(TrialSequence):
             is_feedback = self._check_feedback(is_feedback)
         self.is_feedback = is_feedback
 
-        # TODO remove stimulus_id attribute? If someone needs it, they can
-        # throw it in the feature matrix?
-        if stimulus_id is None:
-            stimulus_id = -1 * np.ones(
-                [self.n_sequence, self.n_trial], dtype=int
-            )
-        else:
-            stimulus_id = self._check_stimulus_id(stimulus_id)
-        self.stimulus_id = stimulus_id
-
         if trial_type is None:
             trial_type = np.ones([self.n_sequence, self.n_trial], dtype=int)
             trial_type[self.is_feedback] = 0
         self.trial_type = trial_type
-
-    def _check_z(self, z):
-        """Check `z` argument.
-
-        Returns:
-            z
-
-        Raises:
-            ValueError
-
-        """
-        if len(z.shape) < 3:
-            raise ValueError((
-                "The argument `z` must be at least a 3D array."
-            ))
-
-        return z
 
     def _check_class_id(self, class_id):
         """Check `class_id` argument.
@@ -173,6 +153,35 @@ class StimulusSequence(TrialSequence):
             ))
 
         return class_id
+
+    def _check_z(self, z):
+        """Check `z` argument.
+
+        Returns:
+            z
+
+        Raises:
+            ValueError
+
+        """
+        if len(z.shape) < 3:
+            raise ValueError((
+                "The argument `z` must be at least a 3D array."
+            ))
+
+        if not z.shape[0] == self.n_sequence:
+            raise ValueError((
+                "The argument `z` must be the same number of sequences as "
+                "`stimulus_id`."
+            ))
+
+        if not z.shape[1] == self.n_trial:
+            raise ValueError((
+                "The argument `z` must be the same number of trials as "
+                "`stimulus_id`."
+            ))
+
+        return z
 
     def _check_is_real(self, is_real):
         """Check `is_real` argument.
@@ -456,8 +465,8 @@ def stack(seq_list, postpend=True):
                 [trial_type, i_seq.trial_type], axis=0
             )
         seq = StimulusSequence(
-            z, class_id, is_real=is_real, is_feedback=is_feedback,
-            stimulus_id=stimulus_id, trial_type=trial_type
+            stimulus_id, class_id, is_real=is_real, is_feedback=is_feedback,
+            z=z, trial_type=trial_type
         )
     else:
         for i_seq in seq_list[1:]:

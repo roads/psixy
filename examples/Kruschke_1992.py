@@ -95,10 +95,10 @@ def main():
     # Create color map of green and red shades, but don't use middle
     # yellow.
     cmap = matplotlib.cm.get_cmap('RdYlGn')
-    norm = matplotlib.colors.Normalize(vmin=0., vmax=catalog.n_task + 1)
-    color_array = cmap(norm(np.flip(range(catalog.n_task + 1))))
-    # Drop yellow color.
-    locs = np.array([1, 1, 1, 0, 1, 1, 1], dtype=bool)
+    norm = matplotlib.colors.Normalize(vmin=0., vmax=catalog.n_task + 2)
+    color_array = cmap(norm(np.flip(range(catalog.n_task + 2))))
+    # Drop middle yellow colors.
+    locs = np.array([1, 1, 1, 0, 0, 1, 1, 1], dtype=bool)
     color_array = color_array[locs, :]
 
     fig, ax = plt.subplots(figsize=(8, 4))
@@ -192,12 +192,16 @@ def generate_stimulus_sequences(class_id_in, feature_matrix, n_sequence, n_epoch
     for i_seq in range(n_sequence):
         curr_cat_idx = np.array([], dtype=int)
         for i_epoch in range(n_epoch):
-            curr_cat_idx = np.hstack([curr_cat_idx, np.random.permutation(cat_idx)])
+            curr_cat_idx = np.hstack(
+                [curr_cat_idx, np.random.permutation(cat_idx)]
+            )
         cat_idx_all[i_seq, :] = curr_cat_idx
 
-    z = feature_matrix[cat_idx_all,:]
+    z = feature_matrix[cat_idx_all, :]
     class_id = class_id_in[cat_idx_all]
-    stimulus_sequence = psixy.sequence.StimulusSequence(z, class_id)
+    stimulus_sequence = psixy.sequence.StimulusSequence(
+        cat_idx_all, class_id, z=z
+    )
     return stimulus_sequence
 
 

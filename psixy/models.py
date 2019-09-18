@@ -90,6 +90,8 @@ class ALCOVE(CategoryLearningModel):
             rho: Parameter governing the Minkowski metric [1,inf]
             tau: Parameter governing the shape of the RBF [1,inf]
             beta: the specificity of similarity [1,inf]
+            gamma: Governs degree to which similarity fades to
+                indifference.
             phi: decision consistency [0,inf]
             lambda_w: learning rate of association weights [0,inf]
             lambda_a: learning rate of attention weights [0, inf]
@@ -110,6 +112,10 @@ class ALCOVE(CategoryLearningModel):
     "In a more complicated version, discussed at the end of the
     article, hidden nodes ares scattered randomly across the space,
     forming a covering map of the input space (pg. 23)."
+
+    Notes:
+        The gradients in the update rules assume that rho=1, tau=1,
+        and gamma=0.
 
     References:
     [1] Kruschke, J. K. (1992). ALCOVE: an exemplar-based connectionist
@@ -150,14 +156,16 @@ class ALCOVE(CategoryLearningModel):
             'rho': 2,
             'tau': 1,
             'beta': 1,
+            'gamma': 0,
             'phi': 1,
             'lambda_w': .001,
             'lambda_a': .001
         }
         self._params = {
-            'rho': {'bounds': [1, 100]},
-            'tau': {'bounds': [1, 100]},
+            'rho': {'bounds': [1, 1]},
+            'tau': {'bounds': [1, 1]},
             'beta': {'bounds': [1, 100]},
+            'gamma': {'bounds': [0, 0]},
             'phi': {'bounds': [0, 100]},
             'lambda_w': {'bounds': [0, 10]},
             'lambda_a': {'bounds': [0, 10]}
@@ -313,9 +321,10 @@ class ALCOVE(CategoryLearningModel):
         self.params['rho'] = params_opt[0]
         self.params['tau'] = params_opt[1]
         self.params['beta'] = params_opt[2]
-        self.params['phi'] = params_opt[3]
-        self.params['lambda_w'] = params_opt[4]
-        self.params['lambda_a'] = params_opt[5]
+        self.params['gamma'] = params_opt[3]
+        self.params['phi'] = params_opt[4]
+        self.params['lambda_w'] = params_opt[5]
+        self.params['lambda_a'] = params_opt[6]
 
     def _get_params(self, params_opt):
         """Set free parameters from optimizer format."""
@@ -323,6 +332,7 @@ class ALCOVE(CategoryLearningModel):
             self.params['rho'],
             self.params['tau'],
             self.params['beta'],
+            self.params['gamma'],
             self.params['phi'],
             self.params['lambda_w'],
             self.params['lambda_a']
@@ -444,8 +454,8 @@ class ALCOVE(CategoryLearningModel):
         theta = {
             'rho': {'value': params_local['rho']},
             'tau': {'value': params_local['tau']},
-            'gamma': {'value': 0.},
-            'beta': {'value': params_local['beta']}
+            'beta': {'value': params_local['beta']},
+            'gamma': {'value': params_local['gamma']}
         }
         # Compute the activation of hidden exemplar nodes based on similarity.
         # (Equation 1, pg. 23)
@@ -717,9 +727,10 @@ class ALCOVE(CategoryLearningModel):
             'rho': params_opt[0],
             'tau': params_opt[1],
             'beta': params_opt[2],
-            'phi': params_opt[3],
-            'lambda_w': params_opt[4],
-            'lambda_a': params_opt[5]
+            'gamma': params_opt[3],
+            'phi': params_opt[4],
+            'lambda_w': params_opt[5],
+            'lambda_a': params_opt[6]
         }
         ll = self._log_likelihood(
             params_local, stimulus_sequence, behavior_sequence
@@ -741,6 +752,7 @@ class ALCOVE(CategoryLearningModel):
             self._params['rho']['bounds'],
             self._params['tau']['bounds'],
             self._params['beta']['bounds'],
+            self._params['gamma']['bounds'],
             self._params['phi']['bounds'],
             self._params['lambda_w']['bounds'],
             self._params['lambda_a']['bounds'],
@@ -771,8 +783,8 @@ def exp_similarity(z_q, z_r, theta, attention):
     # Algorithm-specific parameters governing the similarity kernel.
     rho = theta['rho']["value"]
     tau = theta['tau']["value"]
-    gamma = theta['gamma']["value"]
     beta = theta['beta']["value"]
+    gamma = theta['gamma']["value"]
 
     # Weighted Minkowski distance.
     d_qref = (np.abs(z_q - z_r))**rho
