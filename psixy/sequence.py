@@ -256,16 +256,62 @@ class StimulusSequence(TrialSequence):
 class BehaviorSequence(TrialSequence):
     """Class for storing a behavior sequence."""
 
-    def __init__(self, response_time_ms):
+    def __init__(self, response_time_ms, weight=None, group_id=None):
         """Initialize."""
         self.response_time_ms = self._check_response_time(response_time_ms)
         self.n_sequence = self.response_time_ms.shape[0]
         self.n_trial = self.response_time_ms.shape[1]
 
+        if weight is None:
+            weight = np.ones([self.n_sequence, self.n_trial])
+        else:
+            weight = self._check_weight(weight)
+        self.weight = weight
+
+        if group_id is None:
+            self.group_id = np.zeros([self.n_sequence, self.n_trial], dtype=int)
+        else:
+            group_id = self._check_group_id(group_id)
+        self.group_id = group_id
+
     def _check_response_time(self, response_time_ms):
-        """Check response time."""
+        """Check `response_time_ms` argument.
+
+        Returns:
+            class_id
+
+        Raises:
+            ValueError
+
+        """
         # TODO
         return response_time_ms
+
+    def _check_weight(self, weight):
+        """Check `weight` Argument.
+
+        Returns:
+            weight
+
+        Raises:
+            ValueError
+
+        """
+        # TODO
+        return weight
+
+    def _check_group_id(self, group_id):
+        """Check `group_id` argument.
+
+        Returns:
+            group_id
+
+        Raises:
+            ValueError
+
+        """
+        # TODO
+        return group_id
 
 
 class AFCSequence(BehaviorSequence):
@@ -275,9 +321,11 @@ class AFCSequence(BehaviorSequence):
     forced choice (AFC) behavior.
     """
 
-    def __init__(self, class_id, response_time_ms):
+    def __init__(self, class_id, response_time_ms, weight=None, group_id=None):
         """Initialize."""
-        BehaviorSequence.__init__(self, response_time_ms)
+        BehaviorSequence.__init__(
+            self, response_time_ms, weight=weight, group_id=group_id
+        )
         self.class_id = self._check_class_id(class_id)
 
     def _check_class_id(self, class_id):
