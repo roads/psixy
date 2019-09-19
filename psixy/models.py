@@ -63,16 +63,13 @@ class CategoryLearningModel(object):
     __metaclass__ = ABCMeta
 
     @abstractmethod
-    def fit(
-            self, stimulus_seq, behavior_seq, group_id=None, weight=None,
-            verbose=0):
+    def fit(self, stimulus_seq, behavior_seq, options=None, verbose=0):
         """Fit free parameters using supplied data."""
         pass
 
     @abstractmethod
     def evaluate(
-            self, stimulus_seq, behavior_seq, group_id=None, weight=None,
-            verbose=0):
+            self, stimulus_seq, behavior_seq, verbose=0):
         """Evaluate model using supplied data."""
         pass
 
@@ -104,11 +101,15 @@ class ALCOVE(CategoryLearningModel):
         evaluate:
         predict:
 
-    This code implements the following version:
+    This model can be used to instantiate either a 'training exemplar'
+    or 'covering map' variant of ALCOVE. Just pass in the locations of
+    the the hidden nodes.
+
+    Training exemplar variant:
     "In the simplest version of ALCOVE, there is a hidden node placed
     at the position of every traning exemplar (pg. 23)."
 
-    Alternatively, one could implement the following version:
+    Covering map variant:
     "In a more complicated version, discussed at the end of the
     article, hidden nodes ares scattered randomly across the space,
     forming a covering map of the input space (pg. 23)."

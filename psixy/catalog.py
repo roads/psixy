@@ -301,7 +301,6 @@ class Catalog(object):
         for idx_in, filename_in in enumerate(filepath_list_in):
             was_found = False
             for idx_catalog, filename_catalog in enumerate(self.filepath):
-                # TODO Try to handle other non-exact cases.
                 if filename_in.name == filename_catalog.name:
                     catalog_idx_list[idx_in] = idx_catalog
                     was_found = True

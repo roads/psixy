@@ -439,12 +439,24 @@ def stack(seq_list, postpend=True):
     # Grab relevant information from first entry in list.
     is_stim = True
     try:
-        z = pad_trial(seq_list[0].z, max_n_trial)
-        class_id = pad_trial(seq_list[0].class_id, max_n_trial)
-        is_real = pad_trial(seq_list[0].is_real, max_n_trial)
-        is_feedback = pad_trial(seq_list[0].is_feedback, max_n_trial)
-        stimulus_id = pad_trial(seq_list[0].stimulus_id, max_n_trial)
-        trial_type = pad_trial(seq_list[0].trial_type, max_n_trial)
+        z = pad_trial(
+            seq_list[0].z, max_n_trial, postpend=postpend
+        )
+        class_id = pad_trial(
+            seq_list[0].class_id, max_n_trial, postpend=postpend
+        )
+        is_real = pad_trial(
+            seq_list[0].is_real, max_n_trial, postpend=postpend
+        )
+        is_feedback = pad_trial(
+            seq_list[0].is_feedback, max_n_trial, postpend=postpend
+        )
+        stimulus_id = pad_trial(
+            seq_list[0].stimulus_id, max_n_trial, postpend=postpend
+        )
+        trial_type = pad_trial(
+            seq_list[0].trial_type, max_n_trial, postpend=postpend
+        )
     except AttributeError:
         is_stim = False
         class_id = pad_trial(seq_list[0].class_id, max_n_trial)
@@ -452,17 +464,38 @@ def stack(seq_list, postpend=True):
 
     if is_stim:
         for i_seq in seq_list[1:]:
-            z = np.concatenate([z, i_seq.z], axis=0)
-            class_id = np.concatenate([class_id, i_seq.class_id], axis=0)
-            is_real = np.concatenate([is_real, i_seq.is_real], axis=0)
-            is_feedback = np.concatenate(
-                [is_feedback, i_seq.is_feedback], axis=0
+            curr_stimulus_id = pad_trial(
+                i_seq.stimulus_id, max_n_trial, postpend=postpend
             )
             stimulus_id = np.concatenate(
-                [stimulus_id, i_seq.stimulus_id], axis=0
+                [stimulus_id, curr_stimulus_id], axis=0
+            )
+
+            curr_class_id = pad_trial(
+                i_seq.class_id, max_n_trial, postpend=postpend
+            )
+            class_id = np.concatenate([class_id, curr_class_id], axis=0)
+
+            curr_z = pad_trial(i_seq.z, max_n_trial, postpend=postpend)
+            z = np.concatenate([z, curr_z], axis=0)
+
+            curr_is_real = pad_trial(
+                i_seq.is_real, max_n_trial, postpend=postpend
+            )
+            is_real = np.concatenate([is_real, curr_is_real], axis=0)
+
+            curr_is_feedback = pad_trial(
+                i_seq.is_feedback, max_n_trial, postpend=postpend
+            )
+            is_feedback = np.concatenate(
+                [is_feedback, curr_is_feedback], axis=0
+            )
+
+            curr_trial_type = pad_trial(
+                i_seq.trial_type, max_n_trial, postpend=postpend
             )
             trial_type = np.concatenate(
-                [trial_type, i_seq.trial_type], axis=0
+                [trial_type, curr_trial_type], axis=0
             )
         seq = StimulusSequence(
             stimulus_id, class_id, is_real=is_real, is_feedback=is_feedback,
@@ -470,9 +503,16 @@ def stack(seq_list, postpend=True):
         )
     else:
         for i_seq in seq_list[1:]:
-            class_id = np.concatenate([class_id, i_seq.class_id], axis=0)
+            curr_class_id = pad_trial(
+                i_seq.class_id, max_n_trial, postpend=postpend
+            )
+            class_id = np.concatenate([class_id, curr_class_id], axis=0)
+
+            curr_response_time_ms = pad_trial(
+                i_seq.response_time_ms, max_n_trial, postpend=postpend
+            )
             response_time_ms = np.concatenate(
-                [response_time_ms, i_seq.response_time_ms], axis=0
+                [response_time_ms, curr_response_time_ms], axis=0
             )
         seq = AFCSequence(class_id, response_time_ms)
 
