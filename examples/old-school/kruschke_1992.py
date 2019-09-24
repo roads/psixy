@@ -51,8 +51,8 @@ def main():
     fp_fig_5 = Path('examples', 'kruschke_1992_fig_5.pdf')
     fp_fig_14 = Path('examples', 'kruschke_1992_fig_14.pdf')
 
-    create_figure_5(fp_fig_5)
-    # create_figure_14(fp_fig_14)
+    # create_figure_5(fp_fig_5)
+    create_figure_14(fp_fig_14)
 
 
 def create_figure_5(fp_fig_5):
@@ -65,7 +65,7 @@ def create_figure_5(fp_fig_5):
     class_list = np.array([0, 1], dtype=int)
 
     # Model without attention.
-    model_0 = psixy.models.AlcoveNet(feature_matrix, class_list)
+    model_0 = psixy.models.ALCOVE(feature_matrix, class_list)
     model_0.params['rho'] = 1.0
     model_0.params['tau'] = 1.0
     model_0.params['beta'] = 6.5
@@ -74,7 +74,7 @@ def create_figure_5(fp_fig_5):
     model_0.params['lambda_a'] = 0.0
 
     # Model with attention.
-    model_attn = psixy.models.AlcoveNet(feature_matrix, class_list)
+    model_attn = psixy.models.ALCOVE(feature_matrix, class_list)
     model_attn.params['rho'] = 1.0
     model_attn.params['tau'] = 1.0
     model_attn.params['beta'] = 6.5
@@ -153,7 +153,7 @@ def create_figure_14(fp_fig_14):
     class_list = np.array([0, 1], dtype=int)
 
     # Model without attention.
-    model_attn = psixy.models.AlcoveNet(feature_matrix, class_list)
+    model_attn = psixy.models.ALCOVE(feature_matrix, class_list)
     model_attn.params['rho'] = 1.0
     model_attn.params['tau'] = 1.0
     model_attn.params['beta'] = 3.5

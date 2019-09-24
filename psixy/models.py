@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 # Copyright 2019 The PsiXy Authors. All Rights Reserved.
 #
@@ -36,6 +37,11 @@ Notes:
     free parameters
     state
 
+Todo:
+    * different optimizers
+    * loss term and humble teacher
+    * WeightedMinkowski what should weight default be?
+
 """
 
 from abc import ABCMeta, abstractmethod
@@ -44,6 +50,12 @@ import warnings
 
 import numpy as np
 import scipy
+import tensorflow as tf
+from tensorflow.keras.layers import Conv2D, Dense, Flatten, Layer
+from tensorflow import constant_initializer
+from tensorflow.keras import Model
+from tensorflow.keras.constraints import NonNeg
+# from tensorflow.initializers import identity
 
 import psixy.utils
 
@@ -77,6 +89,47 @@ class CategoryLearningModel(object):
     def predict(self, stimulus_seq, group_id=None, verbose=0):
         """Predict behavior."""
         pass
+
+
+# class GCM(CategoryLearningModel):
+#     """Generalized Context Model (Nosofsky, 1984).
+
+#     Attributes:
+#         params:
+#         state:
+
+#     Methods:
+#         fit:
+#         evaluate:
+#         predict:
+
+#     References:
+#         Nosofsky
+
+#     """
+
+#     def __init__(self, z, class_id, verbose=0):
+#         """Initialize.
+
+#         Arguments:
+#             z: A two-dimension array denoting the location of the
+#                 hidden nodes in psychological space. Each row is
+#                 the representation corresponding to a single stimulus.
+#                 Each column corresponds to a distinct feature
+#                 dimension.
+#             class_id: A list of class ID's. The order of this list
+#                 determines the output order of the model.
+#             verbose (optional): Verbosity of output.
+
+#         """
+#         # Model constants.
+#         self.name = "GCM"
+#         # At initialization, GCM must know ...
+
+#         if verbose > 0:
+#             print('GCM initialized')
+#             print('  Input dimension: ', self.n_dim)
+#             print('  Number of output classes: ', self.n_class)
 
 
 class ALCOVE(CategoryLearningModel):
@@ -142,11 +195,11 @@ class ALCOVE(CategoryLearningModel):
         # Model constants.
         self.name = "ALCOVE"
         # At initialization, ALCOVE must know the locations of the RBFs and
-        # the number of unique classes.
+        # the unique classes.
         self.z = z
         self.n_hidden = z.shape[0]
         self.n_dim = z.shape[1]
-        self.output_class_id = np.unique(class_id)
+        self.output_class_id = self._check_class_id(class_id)
         self.n_class = self.output_class_id.shape[0]
 
         # Settings.
@@ -187,6 +240,16 @@ class ALCOVE(CategoryLearningModel):
             print('  Input dimension: ', self.n_dim)
             print('  Number of hidden nodes: ', self.n_hidden)
             print('  Number of output classes: ', self.n_class)
+
+    def _check_class_id(self, class_id):
+        """Check `class_id` argument."""
+        if not len(np.unique(class_id)) == len(class_id):
+            raise ValueError(
+                'The argument `class_id` must contain all unique'
+                ' integers.'
+            )
+
+        return class_id
 
     def fit(
             self, stimulus_sequence, behavior_sequence, options=None,
@@ -759,6 +822,465 @@ class ALCOVE(CategoryLearningModel):
             self._params['lambda_a']['bounds'],
         ]
         return bnds
+
+
+class AlcoveNet(CategoryLearningModel):
+    """A tensorflow implimentation of ALCOVE (Kruschke, 1992).
+
+    Attributes:
+        params: Dictionary for the model's free parameters.
+            rho: Parameter governing the Minkowski metric [1,inf]
+            tau: Parameter governing the shape of the RBF [1,inf]
+            beta: the specificity of similarity [1,inf]
+            gamma: Governs degree to which similarity fades to
+                indifference.
+            phi: decision consistency [0,inf]
+            lambda_w: learning rate of association weights [0,inf]
+            lambda_a: learning rate of attention weights [0, inf]
+        state: Dictionary for the model's state.
+            attention:
+            association:
+
+    Methods:
+        fit:
+        evaluate:
+        predict:
+
+    References:
+    [1] Kruschke, J. K. (1992). ALCOVE: an exemplar-based connectionist
+        model of category learning. Psychological review, 99(1), 22-44.
+        http://dx.doi.org/10.1037/0033-295X.99.1.22.
+
+    """
+
+    def __init__(self, z, class_id, verbose=0):
+        """Initialize.
+
+        Arguments:
+            z: A two-dimension array denoting the location of the
+                hidden nodes in psychological space. Each row is
+                the representation corresponding to a single stimulus.
+                Each column corresponds to a distinct feature
+                dimension.
+            class_id: A list of class ID's. The order of this list
+                determines the output order of the model.
+            verbose (optional): Verbosity of output.
+
+        """
+        # Model constants.
+        self.name = "ALCOVE"
+        # At initialization, ALCOVE must know the locations of the RBFs and
+        # the unique classes.
+        self.z = z
+        self.n_hidden = z.shape[0]
+        self.n_dim = z.shape[1]
+        self.output_class_id = self._check_class_id(class_id)
+        self.n_class = self.output_class_id.shape[0]
+        # Map IDs. TODO
+        self.class_map = {}
+        for i_class in range(self.n_class):
+            self.class_map[self.output_class_id[i_class]] = i_class
+
+        # Settings.
+        self.attention_mode = 'classic'
+
+        # Free parameters.
+        self.params = {
+            'rho': 2,
+            'tau': 1,
+            'beta': 1,
+            'gamma': 0,
+            'phi': 1,
+            'lambda_a': .001,
+            'lambda_w': .001
+        }
+        self._params = {
+            'rho': {'bounds': [1, 1]},
+            'tau': {'bounds': [1, 1]},
+            'beta': {'bounds': [1, 100]},
+            'gamma': {'bounds': [0, 0]},
+            'phi': {'bounds': [0, 100]},
+            'lambda_a': {'bounds': [0, 10]},
+            'lambda_w': {'bounds': [0, 10]}
+        }
+
+        # State variables.
+        # self.state = {
+        #     'init': {
+        #         'attention': self._default_attention(),
+        #         'association': self._default_association()
+        #     },
+        #     'attention': [],
+        #     'association': []
+        # }
+
+        if verbose > 0:
+            print('ALCOVE initialized')
+            print('  Input dimension: ', self.n_dim)
+            print('  Number of hidden nodes: ', self.n_hidden)
+            print('  Number of output classes: ', self.n_class)
+
+    def _check_class_id(self, class_id):
+        """Check `class_id` argument."""
+        if not len(np.unique(class_id)) == len(class_id):
+            raise ValueError(
+                'The argument `class_id` must contain all unique'
+                ' integers.'
+            )
+
+        return class_id
+
+    def fit(
+            self, stimulus_sequence, behavior_sequence, options=None,
+            verbose=0):
+        """Fit free parameters of model.
+
+        Arguments:
+            stimulus_sequence: A psixy.sequence.StimulusSequence object.
+            behavior_sequence: A psixy.sequence.BehaviorSequence object.
+            options (optional): A dictionary of optimization options.
+                n_restart (10): Number of indpendent restarts to use
+                    when fitting the free parameters.
+
+        Returns:
+            loss_train: The negative log-likelihood of the data given
+                the fitted model.
+
+        """
+        n_trial = stimulus_sequence.n_trial
+        n_sequence = stimulus_sequence.n_sequence
+
+        # TODO handle hyper-parameters differently?
+        # rho = self.params['rho']
+        # tau = self.params['tau']
+        # beta = self.params['beta']
+        # gamma = self.params['gamma']
+        # phi = self.params['phi']
+        rho = 1.0
+        tau = 1.0
+        beta = 8.0
+        gamma = 0.0
+        phi = 2.0
+        lambda_a = self.params['lambda_a']
+        lambda_w = self.params['lambda_w']
+
+        model = AgentALCOVE(
+            self.z, self.n_class, rho, tau, beta, gamma, phi
+        )
+        # TODO lazy model instantiation (don't require n_sequence)?
+
+        loss_agent = tf.keras.losses.SparseCategoricalCrossentropy()  # TODO
+        loss_model = tf.keras.losses.SparseCategoricalCrossentropy()
+
+        optimizer_a = tf.keras.optimizers.SGD(
+            learning_rate=lambda_a, momentum=0.0, nesterov=False
+        )
+        optimizer_w = tf.keras.optimizers.SGD(
+            learning_rate=lambda_w, momentum=0.0, nesterov=False
+        )
+        # TODO third optimizer for updating hyper-parameters?
+        # optimizer_hyper = tf.keras.optimizers.ADAM()
+
+        tracker_model_loss = tf.keras.metrics.Mean(name='model_loss')
+        tracker_model_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='model_accuracy')
+
+        @tf.function
+        def update_step(inputs, labels):
+            with tf.GradientTape(persistent=True) as tape:
+                predictions = model(inputs)
+                loss = loss_agent(labels, predictions)
+            dl_da = tape.gradient(loss, model.layers[0].rbf.minkowski.a)
+            dl_dw = tape.gradient(loss, model.layers[0].association.kernel)
+            optimizer_a.apply_gradients([(dl_da, model.layers[0].rbf.minkowski.a)])
+            optimizer_w.apply_gradients([(dl_dw, model.layers[0].association.kernel)])
+            del tape
+            return predictions
+
+        loss_sequence = np.zeros([n_sequence])
+        accuracy_sequence = np.zeros([n_sequence])
+        for i_seq in range(n_sequence):
+            for i_trial in range(n_trial):
+                inputs = stimulus_sequence.z[i_seq, i_trial, :]
+                inputs = inputs[tf.newaxis, ...]
+                stimulus_labels = stimulus_sequence.class_id[i_seq, i_trial]
+                stimulus_labels = self._convert_labels(stimulus_labels)
+                stimulus_labels = np.array([[stimulus_labels]], dtype=int)
+                # stimulus_labels = stimulus_labels[tf.newaxis, ..., tf.newaxis]
+
+                behavior_labels = behavior_sequence.class_id[i_seq, i_trial]
+                behavior_labels = self._convert_labels(behavior_labels)
+                behavior_labels = np.array([[behavior_labels]], dtype=int)
+                # behavior_labels = behavior_labels[tf.newaxis, ..., tf.newaxis]
+
+                predictions = update_step(inputs, stimulus_labels)
+                loss = loss_model(behavior_labels, predictions)
+                # Log loss and accuracy.
+                tracker_model_loss(loss)
+                tracker_model_accuracy(behavior_labels, predictions)
+
+            loss_sequence[i_seq] = tracker_model_loss.result()
+            accuracy_sequence[i_seq] = tracker_model_accuracy.result()
+
+            # Reset the metrics for the next sequence.
+            tracker_model_loss.reset_states()
+            tracker_model_accuracy.reset_states()
+
+            # template = 'Loss: {0:.2f}, Accuracy: {1:.2f}%'
+            # print(
+            #     template.format(
+            #         tracker_model_loss.result(),
+            #         tracker_model_accuracy.result()*100
+            #     )
+            # )
+
+        loss_train = np.mean(loss_sequence)
+        accuracy_train = np.mean(accuracy_sequence)
+
+        return loss_train
+
+    def evaluate(self, stimulus_sequence, behavior_sequence, verbose=0):
+        """Evaluate."""
+        loss = -1 * self._log_likelihood(
+            self.params, stimulus_sequence, behavior_sequence
+        )
+        if verbose > 0:
+            print("loss: {0:.2f}".format(loss))
+        return loss
+
+    def predict(
+            self, stimulus_sequence, group_id=None, mode='correct',
+            stateful=False, verbose=0):
+        """Predict behavior."""
+        prob_response, prob_response_correct = self._run(
+            self.params, stimulus_sequence, stateful=stateful
+        )
+        if mode == 'correct':
+            res = prob_response_correct
+        elif mode == 'all':
+            res = prob_response
+        else:
+            raise ValueError(
+                'Undefined option {0} for mode argument.'.format(str(mode))
+            )
+        return res
+
+    def _convert_labels(self, labels):
+        """Convert labels."""
+        labels_conv = np.zeros(labels.shape, dtype=int)
+        for key, value in self.class_map.items():
+            locs = np.equal(labels, key)
+            labels_conv[locs] = value
+        return labels_conv
+
+
+class WeightedMinkowski(Layer):
+    """Compute the weighted Minkowski distance.
+
+    Distance is computed between the input(s) and a pre-defined
+    set of coordinates.
+    """
+
+    def __init__(self, coordinates, rho, weight=None):
+        """Initialize."""
+        super(WeightedMinkowski, self).__init__()
+        self.coordinates = coordinates
+        self.n_hidden = coordinates.shape[0]
+        self.n_dim = coordinates.shape[1]
+
+        if weight is None:
+            weight = np.ones([self.n_dim]) / self.n_dim
+
+        self.a = self.add_weight(
+            shape=(self.n_dim),
+            initializer=constant_initializer(weight),
+            constraint=NonNeg(),
+            trainable=True,
+            name='attention'
+        )
+        self.rho = rho
+
+    def call(self, inputs):
+        """Call."""
+        # Add dimensions to exploit broadcasting rules.
+        # e.g., shape (batch size, n_hidden, n_dim)
+        a_expand = tf.expand_dims(self.a, axis=0)
+        a_expand = tf.expand_dims(a_expand, axis=0)
+        coordinates_expand = tf.expand_dims(self.coordinates, axis=0)
+        inputs_expand = tf.expand_dims(inputs, axis=1)
+        return self._minkowski_distance(
+            inputs_expand, coordinates_expand, a_expand
+        )
+
+    def _minkowski_distance(self, z_q, z_r, tf_attention):
+        """Weighted Minkowski distance.
+
+        Arguments:
+            z_q: A set of embedding points.
+                shape = (n_trial, n_dim)
+            z_r: A set of embedding points.
+                shape = (n_trial, n_dim)
+            tf_attention: The weights allocated to each dimension
+                in a weighted minkowski metric.
+                shape = (n_trial, n_dim)
+
+        Returns:
+            The corresponding similarity between rows of embedding
+                points.
+                shape = (n_trial,)
+
+        """
+        # Weighted Minkowski distance.
+        d_qref = tf.pow(tf.abs(z_q - z_r), self.rho)
+        d_qref = tf.multiply(d_qref, tf_attention)
+        d_qref = tf.pow(tf.reduce_sum(d_qref, axis=2), 1. / self.rho)
+
+        return d_qref
+
+
+class ExponentialFamily(Layer):
+    """Exponential family RBF with attention."""
+
+    def __init__(self, coordinates, theta):
+        """Initialize."""
+        super(ExponentialFamily, self).__init__()
+        self.minkowski = WeightedMinkowski(coordinates, rho=theta['rho'])
+        self.theta = theta
+
+    def call(self, inputs):
+        """Call."""
+        d = self.minkowski(inputs)
+        s = self._similarity(d)
+        return s
+
+    def _similarity(self, d):
+        """Exponential family similarity function.
+
+        Arguments:
+            d: An array of distances.
+
+        Returns:
+            sim: The transformed distances.
+
+        """
+        sim = tf.exp(
+            tf.negative(self.theta['beta']) * tf.pow(d, self.theta['tau'])
+        ) + self.theta['gamma']
+        return sim
+
+
+class ALCOVEBlock(Layer):
+    """ALCOVE block for creating composite models."""
+
+    def __init__(self, coordinates, n_output, theta):
+        """Initialize."""
+        super(ALCOVEBlock, self).__init__()
+        n_hidden = 10
+        self.rbf = ExponentialFamily(coordinates, theta)
+        self.association = Dense(
+            n_output, activation=None, use_bias=False, name='association'
+        )
+        self.response = Dense(
+            n_output, activation='softmax', use_bias=False,
+            kernel_initializer='identity', trainable=False, name='response'
+        )
+        self.theta = theta
+
+    def call(self, inputs):
+        """Call."""
+        x = self.rbf(inputs)
+        x = self.association(x)
+        # TODO add phi
+        x = tf.multiply(x, self.theta['phi'])
+        return self.response(x)
+
+
+class AgentALCOVE(Model):
+    """A TensorFlow model for a single agent."""
+
+    def __init__(self, coordinates, n_output, rho, tau, beta, gamma, phi):
+        """Initialize."""
+        super(AgentALCOVE, self).__init__()
+        self.theta = {}
+        self.theta['rho'] = tf.Variable(
+            initial_value=rho,
+            trainable=False
+        )
+        self.theta['tau'] = tf.Variable(
+            initial_value=tau,
+            trainable=False
+        )
+        self.theta['beta'] = tf.Variable(
+            initial_value=beta,
+            trainable=False
+        )
+        self.theta['gamma'] = tf.Variable(
+            initial_value=gamma,
+            trainable=False
+        )
+        self.theta['phi'] = tf.Variable(
+            initial_value=phi,
+            trainable=False
+        )
+        
+        self.block = ALCOVEBlock(coordinates, n_output, self.theta)
+
+    def call(self, inputs):
+        """Call."""
+        return self.block(inputs)
+
+
+class GroupALCOVE(Model):
+    """A TensorFlow model for a single agent."""
+
+    def __init__(self, coordinates, n_sequence, n_output, rho, tau, beta, gamma, phi):
+        """Initialize."""
+        super(GroupALCOVE, self).__init__()
+        self.theta = {}
+        self.theta['rho'] = tf.Variable(
+            initial_value=rho,
+            trainable=False
+        )
+        self.theta['tau'] = tf.Variable(
+            initial_value=tau,
+            trainable=False
+        )
+        self.theta['beta'] = tf.Variable(
+            initial_value=beta,
+            trainable=False
+        )
+        self.theta['gamma'] = tf.Variable(
+            initial_value=gamma,
+            trainable=False
+        )
+        self.theta['phi'] = tf.Variable(
+            initial_value=phi,
+            trainable=False
+        )
+
+        self.n_sequence = n_sequence
+        agent_list = []
+        for i_agent in range(n_sequence):
+            agent_list.append(ALCOVEBlock(coordinates, n_output, self.theta))
+        self.agent_list = agent_list
+
+    def call(self, inputs):
+        """Call."""
+        # (batch_size, n_seq, n_dim)
+        # self.block = tf.keras.layers.concatenate(
+        #     agent_list,
+        #     axis=1
+        # )
+        x_list = []
+        for i_agent in range(self.n_sequence):
+            x0 = inputs[:, i_agent, :]
+            x1 = self.agent_list[i_agent](x0)
+            x1 = tf.expand_dims(x1, axis=1)
+            x_list.append(x1)
+        x = tf.keras.layers.concatenate(
+            x_list,
+            axis=1
+        )
+        return x
 
 
 def exp_similarity(z_q, z_r, theta, attention):
