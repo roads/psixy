@@ -181,7 +181,7 @@ class StimulusSequence(TrialSequence):
                 "`stimulus_id`."
             ))
 
-        return z
+        return z.astype(dtype='float')
 
     def _check_is_real(self, is_real):
         """Check `is_real` argument.
