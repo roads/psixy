@@ -25,7 +25,6 @@ Classes:
 Functions:
     load_model: Load a hdf5 file, that was saved with the `save`
         class method, as a psixy.models.CategoryLearningModel object.
-    exp_similarity: Exponential similarity.
     project_attention: Function for projecting attention.
 
 Notes:
@@ -49,13 +48,15 @@ Todo:
 """
 
 from abc import ABCMeta, abstractmethod
+import collections
 import copy
+import time
 import warnings
 
 import numpy as np
 import scipy
 import tensorflow as tf
-from tensorflow.keras.layers import Layer
+from tensorflow.keras.layers import Layer, InputLayer, Dense, RNN
 from tensorflow import constant_initializer
 from tensorflow.keras import Model
 from tensorflow.keras.constraints import NonNeg
@@ -536,7 +537,7 @@ class ALCOVE(CategoryLearningModel):
         act_in = np.expand_dims(act_in, axis=2)
         z = np.expand_dims(np.transpose(self.z), axis=0)
         attention = np.expand_dims(self.state["attention"], axis=2)
-        act_hidden = exp_similarity(
+        act_hidden = self._similarity(
             act_in, z, theta, attention
         )
 
@@ -742,6 +743,41 @@ class ALCOVE(CategoryLearningModel):
 
         return delta_attention, delta_association
 
+    def _similarity(self, z_q, z_r, theta, attention):
+        """Exponential family similarity kernel.
+
+        Arguments:
+            z_q: A set of embedding points.
+                shape = (n_trial, n_dim)
+            z_r: A set of embedding points.
+                shape = (n_trial, n_dim)
+            theta: A dictionary of algorithm-specific parameters
+                governing the similarity kernel.
+            attention: The weights allocated to each dimension
+                in a weighted minkowski metric.
+                shape = (n_trial, n_dim)
+
+        Returns:
+            The corresponding similarity between rows of embedding
+                points.
+                shape = (n_trial,)
+
+        """
+        # Algorithm-specific parameters governing the similarity kernel.
+        rho = theta['rho']["value"]
+        tau = theta['tau']["value"]
+        beta = theta['beta']["value"]
+        gamma = theta['gamma']["value"]
+
+        # Weighted Minkowski distance.
+        d_qref = (np.abs(z_q - z_r))**rho
+        d_qref = np.multiply(d_qref, attention)
+        d_qref = np.sum(d_qref, axis=1)**(1. / rho)
+
+        # Exponential family similarity kernel.
+        sim_qr = np.exp(np.negative(beta) * d_qref**tau) + gamma
+        return sim_qr
+        
     def _humble_teacher(self, output_activation, correct_category_loc):
         """Humble teacher values for each output node.
 
@@ -950,49 +986,90 @@ class ALCOVE2(CategoryLearningModel):
                 the fitted model.
 
         """
-        def obj_fun(params):
-            return self._loss_opt(
-                params, stimulus_sequence, behavior_sequence
-            )
+        # Settings.
+        max_epoch = 100
+        batch_size = 10
+        buffer_size = 10000
 
-        loss_train = self.evaluate(stimulus_sequence, behavior_sequence)
-        beat_initialization = False
+        # Prepare dataset.
+        inputs = self._prepare_inputs(stimulus_sequence)
+        targets = self._prepare_targets(behavior_sequence)
+        seq_dataset = tf.data.Dataset.from_tensor_slices((inputs, targets))
+        # dataset = seq_dataset.batch(batch_size, drop_remainder=True)
+        dataset = seq_dataset.shuffle(buffer_size).batch(batch_size, drop_remainder=True)
 
-        if verbose > 0:
-            print('Starting configuration:')
-            print('  loss: {0:.2f}'.format(loss_train))
-            print('')
+        theta = self._get_theta(self.params)  # TODO
+        model = self._build_tf_model(theta, batch_size)
+        model_parameters = list(theta.values())
 
-        for i_restart in range(options['n_restart']):
-            params0 = self._rand_param()
-            bnds = self._get_bnds()
-            # SLSQP L-BFGS-B
-            res = scipy.optimize.minimize(
-                obj_fun, params0, method='SLSQP', bounds=bnds,
-                options={'disp': False}
-            )
+        optimizer = tf.keras.optimizers.Adam()
 
-            if verbose > 1:
-                print('Restart {0}'.format(i_restart))
-                print('  loss: {0:.2f} | iterations: {1}'.format(res.fun, res.nit))
-                print('  exit mode: {0} | {1}'.format(res.status, res.message))
-                print('')
+        # @tf.function
+        def train_step(input_batch, target_batch):
+            with tf.GradientTape(watch_accessed_variables=False) as model_tape:
+                model_tape.watch(model_parameters)
+                prob_response_batch = model(input_batch)
+                loss = tf.keras.losses.categorical_crossentropy(
+                    target_batch, prob_response_batch
+                )
+            parameter_gradients = model_tape.gradient(loss, model_parameters)
+            optimizer.apply_gradients(zip(gradients, model_parameters))
+            return loss
 
-            if res.fun < loss_train:
-                beat_initialization = True
-                params_opt = res.x
-                loss_train = res.fun
+        loss_train = np.inf
+        for i_epoch in range(max_epoch):
+            start = time.time()
 
-        # Set free parameters using best run.
-        if beat_initialization:
-            self._set_params(params_opt)
-            if verbose > 0:
-                print('Final')
-                print('  loss: {0:.2f}'.format(loss_train))
-        else:
-            if verbose > 0:
-                print('Final')
-                print('  Did not beat starting configuration.')
+            # initializing the hidden state at the start of every epoch
+            # initally hidden is None
+            hidden = model.reset_states()
+
+            for (i_batch, (input_batch, target_batch)) in enumerate(dataset):
+                loss = train_step(input_batch, target_batch)
+
+                if i_batch % 100 == 0:
+                    template = 'Epoch {} Batch {} Loss {}'
+                    print(template.format(i_epoch + 1, i_batch, loss))
+
+            print('Epoch {} Loss {:.4f}'.format(i_epoch + 1, loss))
+            print('Time taken for 1 epoch {} sec\n'.format(time.time() - start))
+
+        # ===================================================================
+
+        # loss_train = self.evaluate(stimulus_sequence, behavior_sequence)
+        # beat_initialization = False
+
+        # if verbose > 0:
+        #     print('Starting configuration:')
+        #     print('  loss: {0:.2f}'.format(loss_train))
+        #     print('')
+
+        # for i_restart in range(options['n_restart']):
+        #     # Random initialization of variables (with bounds and trainable settings appropriately set).  TODO
+
+        #     # Perform gradient descent.
+
+        #     if verbose > 1:
+        #         print('Restart {0}'.format(i_restart))
+        #         print('  loss: {0:.2f} | iterations: {1}'.format(res.fun, res.nit))
+        #         print('  exit mode: {0} | {1}'.format(res.status, res.message))
+        #         print('')
+
+        #     if res.fun < loss_train:
+        #         beat_initialization = True
+        #         params_opt = res.x
+        #         loss_train = res.fun
+
+        # # Set free parameters using best run.
+        # if beat_initialization:
+        #     self._set_params(params_opt)
+        #     if verbose > 0:
+        #         print('Final')
+        #         print('  loss: {0:.2f}'.format(loss_train))
+        # else:
+        #     if verbose > 0:
+        #         print('Final')
+        #         print('  Did not beat starting configuration.')
 
         return loss_train
 
@@ -1009,15 +1086,31 @@ class ALCOVE2(CategoryLearningModel):
             self, stimulus_sequence, group_id=None, mode='all',
             stateful=False, verbose=0):
         """Predict behavior."""
-        prob_response = self._run(self.params, stimulus_sequence)
+        # Settings
+        batch_size = stimulus_sequence.n_sequence  # TODO handle smaller batches
+        buffer_size = 10000
+
+        # Prepare dataset.
+        inputs = self._prepare_inputs(stimulus_sequence)
+        seq_dataset = tf.data.Dataset.from_tensor_slices((inputs))
+        # TODO right now, have to have same batch size for all batches.
+        dataset = seq_dataset.batch(batch_size, drop_remainder=True)
+
+        theta = self._get_theta(self.params)
+        model = self._build_tf_model(theta, batch_size)
+
+        for input_batch in dataset.take(1):
+            prob_response_batch = model(input_batch)
+
+        prob_response = prob_response_batch
 
         if mode == 'correct':
             stimuli_labels = self._convert_labels(stimulus_sequence.class_id)
             stimuli_labels_one_hot = tf.one_hot(
                 stimuli_labels, self.n_class, axis=2
-            ).numpy()
+            )
             prob_response_correct = prob_response * stimuli_labels_one_hot
-            prob_response_correct = np.sum(prob_response_correct, axis=2)
+            prob_response_correct = tf.reduce_sum(prob_response_correct, axis=2)
             res = prob_response_correct
         elif mode == 'all':
             res = prob_response
@@ -1025,7 +1118,7 @@ class ALCOVE2(CategoryLearningModel):
             raise ValueError(
                 'Undefined option {0} for mode argument.'.format(str(mode))
             )
-        return res
+        return res.numpy()
 
     def _loss(self, params_local, stimulus_sequence, behavior_sequence):
         """Compute the negative log-likelihood of the data given model."""
@@ -1034,132 +1127,59 @@ class ALCOVE2(CategoryLearningModel):
         behavior_labels = self._convert_labels(behavior_sequence.class_id)
         behavior_labels_one_hot = tf.one_hot(
             behavior_labels, self.n_class, axis=2
-        ).numpy()
-
-        prob_response_correct = np.sum(
+        )
+        # TODO use tf categorical cross entropy
+        prob_response_correct = tf.reduce_sum(
             prob_response * behavior_labels_one_hot, axis=2
         )
-        loss_all = -1 * np.log(prob_response_correct)
+        loss_all = -1 * tf.log(prob_response_correct)
 
         # Scalar loss (average within a sequence, then across sequences.)
-        loss_train = np.mean(loss_all, axis=1)
-        loss_train = np.mean(loss_train)
+        loss_train = tf.reduce_mean(loss_all, axis=1)
+        loss_train = tf.reduce_mean(loss_train)
+        loss_train = loss_train.numpy()
 
         if np.isnan(loss_train):
             loss_train = np.inf
 
         return loss_train
 
-    def _loss_opt(
-            self, params_opt, stimulus_sequence, behavior_sequence):
-        """Compute the log-likelihood of the data given model.
-
-        Parameters are structured for using scipy.optimize.minimize.
-        """
-        params_local = {
-            'rho': params_opt[0],
-            'tau': params_opt[1],
-            'beta': params_opt[2],
-            'gamma': params_opt[3],
-            'phi': params_opt[4],
-            'lambda_w': params_opt[5],
-            'lambda_a': params_opt[6]
-        }
-        loss = self._loss(
-            params_local, stimulus_sequence, behavior_sequence
+    def _prepare_inputs(self, stimulus_sequence):
+        """Prepare inputs for TensorFlow model."""
+        # [n_sequence, n_trial, n_dim]
+        stimulus_z = stimulus_sequence.z.astype(dtype=np.float32)
+        # [n_sequence, n_output]
+        stimulus_labels = self._convert_labels(stimulus_sequence.class_id)
+        stimulus_labels_one_hot = tf.one_hot(
+            stimulus_labels, self.n_class, axis=2
         )
-        return loss
+        inputs = {'0': stimulus_z, '1': stimulus_labels_one_hot}
+        return inputs
 
-    def _run(
-            self, params_local, stimulus_sequence):
-        """Run model.
-
-        Arguments:
-            stimulus_sequence: A psixy.sequence.StimulusSequence object.
-
-        Returns:
-            loss_train: The negative log-likelihood of the data given
-                the fitted model.
-
-        """
-        stimulus_sequence.z = stimulus_sequence.z.astype(dtype=np.float32)  # TODO
-        z_hidden = self.z.astype(dtype=np.float32)  # TODO
-
-        n_trial = stimulus_sequence.n_trial
-        n_sequence = stimulus_sequence.n_sequence
-
-        # TODO handle hyper-parameters differently?
-        rho = params_local['rho']
-        tau = params_local['tau']
-        beta = params_local['beta']
-        gamma = params_local['gamma']
-        phi = params_local['phi']
-        lambda_a = params_local['lambda_a']
-        lambda_w = params_local['lambda_w']
-
-        model = InnerAlcove(
-            n_sequence, z_hidden, self.n_class, rho, tau, beta, gamma, phi
+    def _prepare_targets(self, behavior_sequence):
+        """Prepare targets."""
+        # [n_sequence, n_output]
+        behavior_labels = self._convert_labels(behavior_sequence.class_id)
+        behavior_labels_one_hot = tf.one_hot(
+            behavior_labels, self.n_class, axis=2
         )
+        targets = behavior_labels_one_hot
+        return targets
 
-        @tf.function
-        def alcove_loss(desired_y, predicted_y):
-            """ALCOVE loss."""
-            desired_y = tf.one_hot(desired_y, self.n_class, axis=2)
-            teacher_y_min = tf.minimum(-1.0, predicted_y)
+    def _build_tf_model(self, theta, batch_size):
+        """Build tensorflow RNN model."""
+        z_hidden = self.z.astype(dtype=np.float32)
+        n_output = self.n_class
 
-            # Zero out correct locations.
-            teacher_y = teacher_y_min - tf.multiply(desired_y, teacher_y_min)
+        cell = ALCOVECell(theta, z_hidden, n_output, batch_size)
+        rnn = tf.keras.layers.RNN(cell, return_sequences=True)
 
-            # Add in correct locations.
-            teacher_y_max = tf.maximum(1.0, predicted_y)
-            teacher_y = teacher_y + tf.multiply(desired_y, teacher_y_max)
-
-            # Sum over outputs.
-            loss = tf.reduce_mean(tf.square(teacher_y - predicted_y), axis=2)
-
-            # Sum over batches (if any).
-            loss = tf.reduce_mean(loss, axis=0)
-            return loss
-
-        optimizer_a = tf.keras.optimizers.SGD(
-            learning_rate=lambda_a, momentum=0.0, nesterov=False
-        )
-        optimizer_w = tf.keras.optimizers.SGD(
-            learning_rate=lambda_w, momentum=0.0, nesterov=False
-        )
-
-        @tf.function
-        def update_step(inputs, labels):
-            with tf.GradientTape(persistent=True) as tape:
-                y_out = model(inputs)
-                loss = alcove_loss(labels, y_out)
-            dl_da = tape.gradient(loss, model.rbf.minkowski.a)
-            dl_dw = tape.gradient(loss, model.association.w)
-            optimizer_a.apply_gradients([(dl_da, model.rbf.minkowski.a)])
-            optimizer_w.apply_gradients([(dl_dw, model.association.w)])
-            del tape
-            return y_out
-
-        @tf.function
-        def response_rule(x_out, phi):
-            """Apply response rule."""
-            p = tf.multiply(x_out, phi)
-            p = tf.math.softmax(p, axis=2)
-            return p
-
-        prob_response = np.zeros([n_sequence, n_trial, self.n_class])
-        for i_trial in range(n_trial):
-            inputs = stimulus_sequence.z[:, i_trial, :]
-            inputs = inputs[tf.newaxis, ...]
-            stimulus_labels = stimulus_sequence.class_id[:, i_trial]
-            stimulus_labels = self._convert_labels(stimulus_labels)
-            stimulus_labels = stimulus_labels[tf.newaxis, ...]
-
-            y_out = update_step(inputs, stimulus_labels)
-            p = response_rule(y_out, phi)
-            prob_response[:, i_trial, :] = p[0]  # TODO handle batch_size
-
-        return prob_response
+        n_input = z_hidden.shape[1]
+        inp_1 = tf.keras.Input((None, n_input))
+        inp_2 = tf.keras.Input((None, n_output))
+        output = rnn(NestedInput(z_in=inp_1, one_hot_label=inp_2))
+        model = tf.keras.models.Model([inp_1, inp_2], output)
+        return model
 
     def _convert_labels(self, labels):
         """Convert labels."""
@@ -1168,6 +1188,48 @@ class ALCOVE2(CategoryLearningModel):
             locs = np.equal(labels, key)
             labels_conv[locs] = value
         return labels_conv
+
+    def _get_theta(self, params_local):
+        """Return theta."""
+        # TODO this isn't quite right.
+        theta = {
+            'rho': tf.Variable(
+                initial_value=params_local['rho'],
+                trainable=True, constraint=NonNeg(),
+                dtype='float32', name='rho'
+            ),
+            'tau': tf.Variable(
+                initial_value=params_local['tau'],
+                trainable=True, constraint=NonNeg(),
+                dtype='float32', name='tau'
+            ),
+            'beta': tf.Variable(
+                initial_value=params_local['beta'],
+                trainable=True, constraint=NonNeg(),
+                dtype='float32', name='beta'
+            ),
+            'gamma': tf.Variable(
+                initial_value=params_local['gamma'],
+                trainable=True, constraint=NonNeg(),
+                dtype='float32', name='gamma'
+            ),
+            'phi': tf.Variable(
+                initial_value=params_local['phi'],
+                trainable=True, constraint=NonNeg(),
+                dtype='float32', name='phi'
+            ),
+            'lambda_a': tf.Variable(
+                initial_value=params_local['lambda_a'],
+                trainable=True, constraint=NonNeg(),
+                dtype='float32', name='lambda_a'
+            ),
+            'lambda_w': tf.Variable(
+                initial_value=params_local['lambda_w'],
+                trainable=True, constraint=NonNeg(),
+                dtype='float32', name='lambda_w'
+            )
+        }
+        return theta
 
     def _rand_param(self):
         """Randomly sample parameter setting."""
@@ -1192,6 +1254,120 @@ class ALCOVE2(CategoryLearningModel):
         return bnds
 
 
+# @tf.function
+def alcove_loss(desired_y, predicted_y):
+    """ALCOVE loss."""
+    teacher_y_min = tf.minimum(-1.0, predicted_y)
+
+    # Zero out correct locations.
+    teacher_y = teacher_y_min - tf.multiply(desired_y, teacher_y_min)
+
+    # Add in correct locations.
+    teacher_y_max = tf.maximum(1.0, predicted_y)
+    teacher_y = teacher_y + tf.multiply(desired_y, teacher_y_max)
+
+    # Sum over outputs.
+    loss = tf.reduce_mean(tf.square(teacher_y - predicted_y), axis=1)
+
+    return loss
+
+
+NestedInput = collections.namedtuple('NestedInput', ['z_in', 'one_hot_label'])
+
+
+NestedState = collections.namedtuple('NestedState', ['state1', 'state2'])
+
+
+class ALCOVECell(Layer):
+    """A RNN cell."""
+
+    def __init__(self, theta, coordinates, n_output, batch_size, **kwargs):
+        """Initialize."""
+        self.theta = theta
+        self.n_dim = coordinates.shape[1]
+        self.n_hidden = coordinates.shape[0]
+        self.n_output = n_output
+        self.state_size = coordinates.shape[0]
+        self.state_size = NestedState(
+            state1=tf.TensorShape([self.n_dim]),
+            state2=tf.TensorShape([self.n_hidden, self.n_output])
+        )
+        self.rbf = WeightedMinkowski(coordinates, theta['rho'])
+        self.batch_size = batch_size
+        self.weight = np.ones([batch_size, self.n_dim]) / self.n_dim  # TODO other weight options
+        super(ALCOVECell, self).__init__(**kwargs)
+
+    def build(self, input_shapes):
+        """Build.
+
+        Arguments:
+            input_shapes: Expect input_shapes to contain 2 items:
+                z: (batch, n_dim) and one_hot_label: (batch, n_output)]
+
+        """
+        # z_in = input_shapes.z_in[1]
+        # one_hot_label = input_shapes.one_hot_label[1]
+        self.attention = self.add_weight(
+            shape=(self.batch_size, self.n_dim),
+            initializer=constant_initializer(self.weight),
+            constraint=NonNeg(),
+            trainable=True,
+            name='attention'
+        )
+        # TODO is the initializer bad? should I try jitter around zero?
+        self.association = self.add_weight(
+            shape=(self.batch_size, self.n_hidden, self.n_output),
+            initializer='zeros',
+            name='association')
+        self.built = True
+
+    def call(self, inputs, states):
+        """Call.
+
+        Arguments:
+            inputs: Expect inputs to contain 2 items:
+                z: shape=(batch, n_dim)
+                one_hot_label: shape=(batch, n_output)]
+
+        """
+        z_in, one_hot_label = tf.nest.flatten(inputs)
+
+        # Update state.
+        delta_attention, delta_association = states
+        a = self.attention - self.theta['lambda_a'] * delta_attention
+        a = tf.math.maximum(a, 0)
+        self.attention.assign(a)
+        self.association.assign(self.association - self.theta['lambda_w'] * delta_association)
+
+        state_variables = [self.attention, self.association]
+        with tf.GradientTape(watch_accessed_variables=False, persistent=True) as state_tape:
+            state_tape.watch(state_variables)
+            # Compute RBF activations.
+            d = self.rbf(z_in, self.attention)
+            s = tf.exp(
+                tf.negative(self.theta['beta']) * tf.pow(d, self.theta['tau'])
+            ) + self.theta['gamma']
+            # Compute output activations.
+            # Convert to shape=(batch_size, n_hidden, n_output)
+            s2 = tf.expand_dims(s, axis=2)
+            x2 = tf.multiply(s2, self.association)
+            x_out = tf.reduce_sum(x2, axis=1)
+            # Compute ALCOVE loss.
+            loss = alcove_loss(one_hot_label, x_out)
+        dl_da = state_tape.gradient(loss, self.attention)
+        dl_dw = state_tape.gradient(loss, self.association)
+        del state_tape
+
+        # Response rule.
+        p = tf.multiply(x_out, self.theta['phi'])
+        p = tf.math.softmax(p, axis=1)
+
+        new_states = NestedState(
+            state1=dl_da, state2=dl_dw
+        )
+        return p, new_states
+
+
 class WeightedMinkowski(Layer):
     """Compute the weighted Minkowski distance.
 
@@ -1199,244 +1375,59 @@ class WeightedMinkowski(Layer):
     set of coordinates.
     """
 
-    def __init__(self, n_sequence, coordinates, rho, weight=None):
+    def __init__(self, coordinates, rho):
         """Initialize."""
         super(WeightedMinkowski, self).__init__()
         self.coordinates = coordinates
         self.n_hidden = coordinates.shape[0]
         self.n_dim = coordinates.shape[1]
-
-        if weight is None:
-            weight = np.ones([n_sequence, self.n_dim]) / self.n_dim
-            # weight = np.ones([self.n_dim]) / self.n_dim
-
-        # a_list = []
-        # for i_sequence in range(n_sequence):
-        #     a_list.append(
-        #         self.add_weight(
-        #             shape=(self.n_dim),
-        #             initializer=constant_initializer(weight),
-        #             constraint=NonNeg(),
-        #             trainable=True,
-        #             name='attention'
-        #         )
-        #     )
-        # self.a_list = a_list
-        # self.a = tf.stack(a_list, axis=0)
-        self.a = self.add_weight(
-            shape=(n_sequence, self.n_dim),
-            initializer=constant_initializer(weight),
-            constraint=NonNeg(),
-            trainable=True,
-            name='attention'
-        )
         self.rho = rho
 
-    def call(self, inputs):
-        """Call."""
+    def call(self, z_in, attention):
+        """Call.
+
+        Arguments:
+            z_in: (batch_size, n_dim)
+            attention: shape=(batch_size, n_dim)
+
+        """
         # Add dimensions to exploit broadcasting rules.
-        # e.g., shape (batch size, n_seq, n_hidden, n_dim)
-        a_expand = tf.expand_dims(self.a, axis=0)
-        a_expand = tf.expand_dims(a_expand, axis=2)
+        # e.g., shape (batch size, n_hidden, n_dim)
 
-        coordinates_expand = tf.expand_dims(self.coordinates, axis=0)
-        coordinates_expand = tf.expand_dims(self.coordinates, axis=0)
+        # Expand inputs to have singleton n_hidden dimension.
+        z_q = tf.expand_dims(z_in, axis=1)
 
-        inputs_expand = tf.expand_dims(inputs, axis=2)
+        # Expand inputs to have singleton n_hidden dimension.
+        a = tf.expand_dims(attention, axis=1)
 
-        return self._minkowski_distance(
-            inputs_expand, coordinates_expand, a_expand
-        )
+        # Expand coordinates to have singleton batch_size dimension.
+        z_r = tf.expand_dims(self.coordinates, axis=0)
 
-    def _minkowski_distance(self, z_q, z_r, tf_attention):
+        return self._minkowski_distance(z_q, z_r, a)
+
+    def _minkowski_distance(self, z_q, z_r, a):
         """Weighted Minkowski distance.
 
         Arguments:
             z_q: A set of embedding points.
-                shape = (n_trial, n_dim)
+                shape = (batch_size, 1, n_dim)
             z_r: A set of embedding points.
-                shape = (n_trial, n_dim)
-            tf_attention: The weights allocated to each dimension
+                shape = (1, n_hidden, n_dim)
+            a: The weights allocated to each dimension
                 in a weighted minkowski metric.
-                shape = (n_trial, n_dim)
+                shape = (batch_size, 1, n_dim)
 
         Returns:
             The corresponding similarity between rows of embedding
                 points.
-                shape = (n_trial,)
+                shape = (batch_size, n_hidden)
 
         """
         # Weighted Minkowski distance.
-        d_qref = tf.pow(tf.abs(z_q - z_r), self.rho)
-        d_qref = tf.multiply(d_qref, tf_attention)
-        d_qref = tf.pow(tf.reduce_sum(d_qref, axis=-1), 1. / self.rho)
-
-        return d_qref
-
-
-class ExponentialFamily(Layer):
-    """Exponential family RBF with attention.
-
-    Returns:
-        (batch_size, n_seq, n_hidden)
-
-    """
-
-    def __init__(self, n_sequence, coordinates, theta):
-        """Initialize."""
-        super(ExponentialFamily, self).__init__()
-        self.minkowski = WeightedMinkowski(n_sequence, coordinates, rho=theta['rho'])
-        self.theta = theta
-
-    def call(self, inputs):
-        """Call."""
-        d = self.minkowski(inputs)
-        s = self._similarity(d)
-        return s
-
-    def _similarity(self, d):
-        """Exponential family similarity function.
-
-        Arguments:
-            d: An array of distances.
-
-        Returns:
-            sim: The transformed distances.
-
-        """
-        sim = tf.exp(
-            tf.negative(self.theta['beta']) * tf.pow(d, self.theta['tau'])
-        ) + self.theta['gamma']
-        return sim
-
-
-class ParallelDense(Layer):
-    """A parallel dense layer.
-
-    Returns:
-        (batch_size, n_sequence, n_output)
-
-    """
-
-    def __init__(
-            self, n_sequence, n_hidden, n_output, activation=None,
-            use_bias=True, kernel_initializer='identity', trainable=True):
-        """Initialize."""
-        super(ParallelDense, self).__init__()
-        self.n_sequence = n_sequence
-        self.n_hidden = n_hidden
-        self.n_output = n_output
-        self.use_bias = use_bias
-        self.trainable = trainable
-        self.kernel_initializer = kernel_initializer
-
-    def build(self, input_shape):
-        """Build."""
-        w_init = tf.random_normal_initializer()
-        self.w = tf.Variable(
-            initial_value=w_init(shape=(self.n_sequence, self.n_hidden, self.n_output),
-            dtype='float32'),
-            trainable=True
-        )
-        # b_init = tf.zeros_initializer()
-        # self.b = tf.Variable(
-        #     initial_value=b_init(shape=(self.n_output,),
-        #     dtype='float32'),
-        #     trainable=self.use_bias
-        # )
-
-    def call(self, act_hidden):
-        """Call."""
-        # batch_size, n_sequence, n_hidden, n_output
-        x1 = tf.expand_dims(act_hidden, axis=3)  # TODO
-        w1 = tf.expand_dims(self.w, axis=0)
-        x2 = tf.multiply(x1, self.w)  # + self.b
-        x3 = tf.reduce_sum(x2, axis=2)
-        return x3
-
-
-class InnerAlcove(Model):
-    """A TensorFlow model.
-
-    Assumes:
-        input is (batch_size, n_sequence, n_dim)
-        output is (batch_size, n_sequence, n_output)
-    """
-
-    def __init__(self, n_sequence, coordinates, n_output, rho, tau, beta, gamma, phi):
-        """Initialize."""
-        super(InnerAlcove, self).__init__()
-        self.theta = {
-            'rho': tf.Variable(
-                initial_value=rho, trainable=False, dtype='float32'
-            ),
-            'tau': tf.Variable(
-                initial_value=tau, trainable=False, dtype='float32'
-            ),
-            'beta': tf.Variable(
-                initial_value=beta, trainable=False, dtype='float32'
-            ),
-            'gamma': tf.Variable(
-                initial_value=gamma, trainable=False, dtype='float32'
-            ),
-            'phi': tf.Variable(
-                initial_value=phi, trainable=False, dtype='float32'
-            )
-        }
-        n_hidden = coordinates.shape[0]
-        self.rbf = ExponentialFamily(n_sequence, coordinates, self.theta)
-        self.association = ParallelDense(
-            n_sequence, n_hidden, n_output, activation=None, use_bias=False
-        )
-
-    def call(self, inputs):
-        """Call."""
-        # Pass through RBF layer (with attention).
-        x_hidden = self.rbf(inputs)
-
-        # Apply association weight matrix.
-        x_out = self.association(x_hidden)
-
-        # # Apply response rule.
-        # p = tf.multiply(x_out, self.theta['phi'])
-        # return tf.math.softmax(p, axis=2)
-        return x_out
-
-
-def exp_similarity(z_q, z_r, theta, attention):
-    """Exponential family similarity kernel.
-
-    Arguments:
-        z_q: A set of embedding points.
-            shape = (n_trial, n_dim)
-        z_r: A set of embedding points.
-            shape = (n_trial, n_dim)
-        theta: A dictionary of algorithm-specific parameters
-            governing the similarity kernel.
-        attention: The weights allocated to each dimension
-            in a weighted minkowski metric.
-            shape = (n_trial, n_dim)
-
-    Returns:
-        The corresponding similarity between rows of embedding
-            points.
-            shape = (n_trial,)
-
-    """
-    # Algorithm-specific parameters governing the similarity kernel.
-    rho = theta['rho']["value"]
-    tau = theta['tau']["value"]
-    beta = theta['beta']["value"]
-    gamma = theta['gamma']["value"]
-
-    # Weighted Minkowski distance.
-    d_qref = (np.abs(z_q - z_r))**rho
-    d_qref = np.multiply(d_qref, attention)
-    d_qref = np.sum(d_qref, axis=1)**(1. / rho)
-
-    # Exponential family similarity kernel.
-    sim_qr = np.exp(np.negative(beta) * d_qref**tau) + gamma
-    return sim_qr
+        dist_qr = tf.pow(tf.abs(z_q - z_r), self.rho)
+        dist_qr = tf.multiply(dist_qr, a)
+        dist_qr = tf.pow(tf.reduce_sum(dist_qr, axis=-1), tf.divide(1., self.rho))
+        return dist_qr
 
 
 def determine_class_loc(class_id, output_class_id):
