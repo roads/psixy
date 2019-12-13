@@ -65,7 +65,7 @@ def create_figure_5(fp_fig_5):
     class_list = np.array([0, 1], dtype=int)
 
     # Model without attention.
-    model_0 = psixy.models.ALCOVE2(feature_matrix, class_list)
+    model_0 = psixy.models.ALCOVE(feature_matrix, class_list)
     model_0.params['rho'] = 1.0
     model_0.params['tau'] = 1.0
     model_0.params['beta'] = 6.5
@@ -74,7 +74,7 @@ def create_figure_5(fp_fig_5):
     model_0.params['lambda_a'] = 0.0
 
     # Model with attention.
-    model_attn = psixy.models.ALCOVE2(feature_matrix, class_list)
+    model_attn = psixy.models.ALCOVE(feature_matrix, class_list)
     model_attn.params['rho'] = 1.0
     model_attn.params['tau'] = 1.0
     model_attn.params['beta'] = 6.5
@@ -89,7 +89,9 @@ def create_figure_5(fp_fig_5):
             catalog.task(task_idx=i_task), feature_matrix, n_sequence, n_epoch
         )
 
-        prob_correct_attn = model_attn.predict(stimulus_sequence, mode='correct')
+        prob_correct_attn = model_attn.predict(
+            stimulus_sequence, mode='correct'
+        )
         accuracy_epoch_attn[i_task, :] = epoch_analysis_correct(
             prob_correct_attn, catalog.n_stimuli
         )
@@ -153,7 +155,7 @@ def create_figure_14(fp_fig_14):
     class_list = np.array([0, 1], dtype=int)
 
     # Model without attention.
-    model_attn = psixy.models.ALCOVE2(feature_matrix, class_list)
+    model_attn = psixy.models.ALCOVE(feature_matrix, class_list)
     model_attn.params['rho'] = 1.0
     model_attn.params['tau'] = 1.0
     model_attn.params['beta'] = 3.5
@@ -177,7 +179,9 @@ def create_figure_14(fp_fig_14):
         'o', 's', 's', 's', 's', 's', 's',
     ]
     color_array = np.vstack([
-        np.repeat(np.array([[0.07197232, 0.54071511, 0.28489043, .1]]), 6, axis=0),
+        np.repeat(
+            np.array([[0.07197232, 0.54071511, 0.28489043, .1]]), 6, axis=0
+        ),
         np.array([[0.8899654, 0.28673587, 0.19815456, 1.]]),
         np.array([[0.4295271, 0.75409458, 0.39146482, 1.]]),
         np.repeat(np.array([[0.64705882, 0., 0.14901961, .1]]), 6, axis=0),
@@ -219,7 +223,8 @@ def epoch_analysis_correct(prob_correct, n_stimuli_per_epoch):
     return epoch_avg
 
 
-def epoch_analysis_stimulus(s_seq, prob_response, stim_id_list, n_stimuli_per_epoch):
+def epoch_analysis_stimulus(
+        s_seq, prob_response, stim_id_list, n_stimuli_per_epoch):
     """Epoch analysis."""
     n_sequence = prob_response.shape[0]
     n_epoch = int(prob_response.shape[1] / n_stimuli_per_epoch)
@@ -315,7 +320,8 @@ def rules_exceptions_catalog():
     return catalog, feature_matrix, stimulus_label
 
 
-def generate_fig5_stimulus_sequences(class_id_in, feature_matrix, n_sequence, n_epoch):
+def generate_fig5_stimulus_sequences(
+        class_id_in, feature_matrix, n_sequence, n_epoch):
     """Generate stimulus sequences."""
     n_stimuli = len(class_id_in)
     cat_idx = np.arange(n_stimuli, dtype=int)
@@ -337,7 +343,8 @@ def generate_fig5_stimulus_sequences(class_id_in, feature_matrix, n_sequence, n_
     return stimulus_sequence
 
 
-def generate_fig_14_stimulus_sequences(class_id_in, feature_matrix, n_sequence, n_epoch):
+def generate_fig_14_stimulus_sequences(
+        class_id_in, feature_matrix, n_sequence, n_epoch):
     """Generate stimulus sequences."""
     n_stimuli = len(class_id_in)
     epoch_cat_idx = np.hstack([
@@ -347,7 +354,9 @@ def generate_fig_14_stimulus_sequences(class_id_in, feature_matrix, n_sequence, 
 
     n_stimuli_per_epoch = len(epoch_cat_idx)
 
-    cat_idx_all = np.zeros([n_sequence, n_epoch * n_stimuli_per_epoch], dtype=int)
+    cat_idx_all = np.zeros(
+        [n_sequence, n_epoch * n_stimuli_per_epoch], dtype=int
+    )
     for i_seq in range(n_sequence):
         curr_cat_idx = np.array([], dtype=int)
         for i_epoch in range(n_epoch):

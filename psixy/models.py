@@ -100,7 +100,7 @@ class CategoryLearningModel(object):
         pass
 
 
-class ALCOVE2(CategoryLearningModel):
+class ALCOVE(CategoryLearningModel):
     """ALCOVE category learning model (Kruschke, 1992).
 
     Attributes:
@@ -137,8 +137,8 @@ class ALCOVE2(CategoryLearningModel):
 
     Notes:
         The model is implemented using TensorFlow, so that gradients
-        for state updates can be computed for arbitrary model parameter
-        settings. The original model presented in the paper assumed
+        for state updates can be computed for arbitrary parameter
+        settings. The original model presented in [1] assumed that
         rho=1, tau=1, and gamma=0.
 
     References:
@@ -171,13 +171,13 @@ class ALCOVE2(CategoryLearningModel):
         self.n_dim = z.shape[1]
         self.output_class_id = self._check_class_id(class_id)
         self.n_class = self.output_class_id.shape[0]
-        # Map IDs. TODO
+        # Map IDs.
         self.class_map = {}
         for i_class in range(self.n_class):
             self.class_map[self.output_class_id[i_class]] = i_class
 
         # Settings.
-        self.attention_mode = 'classic'
+        self.attention_mode = 'classic'  # TODO remove?
 
         # Free parameters.
         self.params = {
@@ -215,16 +215,6 @@ class ALCOVE2(CategoryLearningModel):
             print('  Number of hidden nodes: ', self.n_hidden)
             print('  Number of output classes: ', self.n_class)
 
-    def _check_class_id(self, class_id):
-        """Check `class_id` argument."""
-        if not len(np.unique(class_id)) == len(class_id):
-            raise ValueError(
-                'The argument `class_id` must contain all unique'
-                ' integers.'
-            )
-
-        return class_id
-
     def fit(
             self, stimulus_sequence, behavior_sequence, options=None,
             verbose=0):
@@ -243,7 +233,7 @@ class ALCOVE2(CategoryLearningModel):
 
         """
         # TODO implement working fit method.
-    
+
         # Settings.
         max_epoch = 10
         batch_size = stimulus_sequence.n_sequence  # TODO
@@ -426,6 +416,16 @@ class ALCOVE2(CategoryLearningModel):
             )
         return res.numpy()
 
+    def _check_class_id(self, class_id):
+        """Check `class_id` argument."""
+        if not len(np.unique(class_id)) == len(class_id):
+            raise ValueError(
+                'The argument `class_id` must contain all unique'
+                ' integers.'
+            )
+
+        return class_id
+
     def _loss(self, params_local, stimulus_sequence, behavior_sequence):
         """Compute the negative log-likelihood of the data given model."""
         prob_response = self._run(params_local, stimulus_sequence)
@@ -565,13 +565,13 @@ class ALCOVE2(CategoryLearningModel):
     def _rand_param(self):
         """Randomly sample parameter setting."""
         param_0 = []
-        for bnd_set in self._get_bnds():
+        for bnd_set in self._get_bounds():
             start = bnd_set[0]
             width = bnd_set[1] - bnd_set[0]
             param_0.append(start + (np.random.rand(1)[0] * width))
         return param_0
 
-    def _get_bnds(self):
+    def _get_bounds(self):
         """Return bounds."""
         bnds = [
             self._params['rho']['bounds'],
