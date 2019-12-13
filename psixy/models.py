@@ -56,12 +56,17 @@ import warnings
 import numpy as np
 import scipy
 import tensorflow as tf
-from tensorflow.keras.layers import Layer, InputLayer, Dense, RNN
+from tensorflow.keras.layers import Layer, Dense, RNN
 from tensorflow import constant_initializer
 from tensorflow.keras import Model
 from tensorflow.keras.constraints import NonNeg
+from tensorflow.python.ops import math_ops
+from tensorflow.python.keras import backend as K
+from tensorflow.keras.constraints import Constraint
 
 import psixy.utils
+
+# tf.keras.backend.set_floatx('float64')
 
 
 class CategoryLearningModel(object):
@@ -95,48 +100,7 @@ class CategoryLearningModel(object):
         pass
 
 
-# class GCM(CategoryLearningModel):
-#     """Generalized Context Model (Nosofsky, 1984).
-
-#     Attributes:
-#         params:
-#         state:
-
-#     Methods:
-#         fit:
-#         evaluate:
-#         predict:
-
-#     References:
-#         Nosofsky
-
-#     """
-
-#     def __init__(self, z, class_id, verbose=0):
-#         """Initialize.
-
-#         Arguments:
-#             z: A two-dimension array denoting the location of the
-#                 hidden nodes in psychological space. Each row is
-#                 the representation corresponding to a single stimulus.
-#                 Each column corresponds to a distinct feature
-#                 dimension.
-#             class_id: A list of class ID's. The order of this list
-#                 determines the output order of the model.
-#             verbose (optional): Verbosity of output.
-
-#         """
-#         # Model constants.
-#         self.name = "GCM"
-#         # At initialization, GCM must know ...
-
-#         if verbose > 0:
-#             print('GCM initialized')
-#             print('  Input dimension: ', self.n_dim)
-#             print('  Number of output classes: ', self.n_class)
-
-
-class ALCOVE(CategoryLearningModel):
+class ALCOVE2(CategoryLearningModel):
     """ALCOVE category learning model (Kruschke, 1992).
 
     Attributes:
@@ -172,8 +136,10 @@ class ALCOVE(CategoryLearningModel):
     forming a covering map of the input space (pg. 23)."
 
     Notes:
-        The gradients in the update rules assume that rho=1, tau=1,
-        and gamma=0.
+        The model is implemented using TensorFlow, so that gradients
+        for state updates can be computed for arbitrary model parameter
+        settings. The original model presented in the paper assumed
+        rho=1, tau=1, and gamma=0.
 
     References:
     [1] Kruschke, J. K. (1992). ALCOVE: an exemplar-based connectionist
@@ -200,717 +166,7 @@ class ALCOVE(CategoryLearningModel):
         self.name = "ALCOVE"
         # At initialization, ALCOVE must know the locations of the RBFs and
         # the unique classes.
-        self.z = z
-        self.n_hidden = z.shape[0]
-        self.n_dim = z.shape[1]
-        self.output_class_id = self._check_class_id(class_id)
-        self.n_class = self.output_class_id.shape[0]
-
-        # Settings.
-        self.attention_mode = 'classic'
-
-        # Free parameters.
-        self.params = {
-            'rho': 2,
-            'tau': 1,
-            'beta': 1,
-            'gamma': 0,
-            'phi': 1,
-            'lambda_w': .001,
-            'lambda_a': .001
-        }
-        self._params = {
-            'rho': {'bounds': [1, 1]},
-            'tau': {'bounds': [1, 1]},
-            'beta': {'bounds': [1, 100]},
-            'gamma': {'bounds': [0, 0]},
-            'phi': {'bounds': [0, 100]},
-            'lambda_w': {'bounds': [0, 10]},
-            'lambda_a': {'bounds': [0, 10]}
-        }
-
-        # State variables.
-        self.state = {
-            'init': {
-                'attention': self._default_attention(),
-                'association': self._default_association()
-            },
-            'attention': [],
-            'association': []
-        }
-
-        if verbose > 0:
-            print('ALCOVE initialized')
-            print('  Input dimension: ', self.n_dim)
-            print('  Number of hidden nodes: ', self.n_hidden)
-            print('  Number of output classes: ', self.n_class)
-
-    def _check_class_id(self, class_id):
-        """Check `class_id` argument."""
-        if not len(np.unique(class_id)) == len(class_id):
-            raise ValueError(
-                'The argument `class_id` must contain all unique'
-                ' integers.'
-            )
-
-        return class_id
-
-    def fit(
-            self, stimulus_sequence, behavior_sequence, options=None,
-            verbose=0):
-        """Fit free parameters of model.
-
-        Arguments:
-            stimulus_sequence: A psixy.sequence.StimulusSequence object.
-            behavior_sequence: A psixy.sequence.BehaviorSequence object.
-            options (optional): A dictionary of optimization options.
-                n_restart (10): Number of indpendent restarts to use
-                    when fitting the free parameters.
-
-        Returns:
-            loss_train: The negative log-likelihood of the data given
-                the fitted model.
-
-        """
-        def obj_fun(params):
-            return self._loss_opt(
-                params, stimulus_sequence, behavior_sequence
-            )
-
-        loss_train = self.evaluate(stimulus_sequence, behavior_sequence)
-        beat_initialization = False
-
-        if verbose > 0:
-            print('Starting configuration:')
-            print('  loss: {0:.2f}'.format(loss_train))
-            print('')
-
-        for i_restart in range(options['n_restart']):
-            params0 = self._rand_param()
-            bnds = self._get_bnds()
-            # SLSQP L-BFGS-B
-            res = scipy.optimize.minimize(
-                obj_fun, params0, method='SLSQP', bounds=bnds,
-                options={'disp': False}
-            )
-
-            if verbose > 1:
-                print('Restart {0}'.format(i_restart))
-                print('  loss: {0:.2f} | iterations: {1}'.format(res.fun, res.nit))
-                print('  exit mode: {0} | {1}'.format(res.status, res.message))
-                print('')
-
-            if res.fun < loss_train:
-                beat_initialization = True
-                params_opt = res.x
-                loss_train = res.fun
-
-        # Set free parameters using best run.
-        if beat_initialization:
-            self._set_params(params_opt)
-            if verbose > 0:
-                print('Final')
-                print('  loss: {0:.2f}'.format(loss_train))
-        else:
-            if verbose > 0:
-                print('Final')
-                print('  Did not beat starting configuration.')
-
-        return loss_train
-
-    def evaluate(self, stimulus_sequence, behavior_sequence, verbose=0):
-        """Evaluate."""
-        loss = self._loss(
-            self.params, stimulus_sequence, behavior_sequence
-        )
-        if verbose > 0:
-            print("loss: {0:.2f}".format(loss))
-        return loss
-
-    def predict(
-            self, stimulus_sequence, group_id=None, mode='correct',
-            stateful=False, verbose=0):
-        """Predict behavior."""
-        prob_response, prob_response_correct = self._run(
-            self.params, stimulus_sequence, stateful=stateful
-        )
-        if mode == 'correct':
-            res = prob_response_correct
-        elif mode == 'all':
-            res = prob_response
-        else:
-            raise ValueError(
-                'Undefined option {0} for mode argument.'.format(str(mode))
-            )
-        return res
-
-    def _init_state(self, n_sequence=1):
-        """Initialize model state.
-
-        Arguments:
-            n_sequence: The number of sequences.
-        """
-        self.state['attention'] = np.repeat(
-            self.state['init']['attention'], n_sequence, axis=0
-        )
-        self.state['association'] = np.repeat(
-            self.state['init']['association'], n_sequence, axis=0
-        )
-
-    def _default_attention(self):
-        """Initialize attention weights using default settings."""
-        # NOTE: The original version of ALCOVE uses attention weights
-        # that sum to one. However we use attention weights that sum to
-        # the number of dimensions in order to preserve the standard case
-        # of minkowski distance
-        if self.attention_mode == 'classic':
-            a = np.ones([1, self.n_dim]) / self.n_dim
-        else:
-            a = np.ones([1, self.n_dim])
-        return a
-
-    def _default_association(self):
-        """Initialize association weights using default settings.
-
-        "The association weights were initialized at zero, reflecting
-        the notion that before training there should be no associations
-        between any exemplars and particular categories (pg. 27)."
-
-        """
-        # w = (
-        #     np.random.rand(1, self.n_hidden, self.n_class) *
-        #     .00001
-        # ) - .000005
-        w = np.zeros([1, self.n_hidden, self.n_class])
-        return w
-
-    def _set_params(self, params_opt):
-        """Set free parameters from optimizer format."""
-        self.params['rho'] = params_opt[0]
-        self.params['tau'] = params_opt[1]
-        self.params['beta'] = params_opt[2]
-        self.params['gamma'] = params_opt[3]
-        self.params['phi'] = params_opt[4]
-        self.params['lambda_w'] = params_opt[5]
-        self.params['lambda_a'] = params_opt[6]
-
-    def _get_params(self, params_opt):
-        """Set free parameters from optimizer format."""
-        params_opt = [
-            self.params['rho'],
-            self.params['tau'],
-            self.params['beta'],
-            self.params['gamma'],
-            self.params['phi'],
-            self.params['lambda_w'],
-            self.params['lambda_a']
-        ]
-        return params_opt
-
-    def _run(self, params_local, stimulus_seq, stateful=False):
-        """Run model.
-
-        Arguments:
-            params_local: Locally scoped free parameters.
-            stimulus_seq: A psixy.sequence.StimulusSequence object.
-            stateful (optional): Boolean that controls initialization
-                of state parameters.
-
-        """
-        n_sequence = stimulus_seq.n_sequence
-        n_trial = stimulus_seq.n_trial
-        prob_response = np.zeros((n_sequence, self.n_class, n_trial))
-
-        # Initialize state.
-        if not stateful:
-            self._init_state(n_sequence)
-
-        correct_category_loc = determine_class_loc(
-            stimulus_seq.class_id, self.output_class_id
-        )
-
-        delta_association_batch = np.zeros(
-            [n_sequence, self.n_hidden, self.n_class]
-        )
-        delta_attention_batch = np.zeros([n_sequence, self.n_dim])
-        # Iterate over trials
-        for i_trial in range(stimulus_seq.n_trial):
-            # Propagate input activation through the network.
-            (act_hid, act_out) = self._forward_pass(
-                params_local, stimulus_seq.z[:, i_trial, :]
-            )
-
-            # Compute response probability.
-            prob_response[:, :, i_trial] = self._response_rule(
-                params_local, act_out
-            )
-
-            # Compute state updates.
-            (delta_attention, delta_association) = self._compute_update(
-                params_local, stimulus_seq.z[:, i_trial, :], act_hid, act_out,
-                correct_category_loc[:, :, i_trial],
-                np.logical_and(
-                    stimulus_seq.is_real[:, i_trial],
-                    stimulus_seq.is_feedback[:, i_trial]
-                )
-            )
-
-            # TODO temporary batch updating.
-            # if (i_trial > 0) and (np.mod(i_trial + 1, 8) == 0):
-            #     # Apply state updates.
-            #     self.state['attention'] = np.maximum(
-            #         0, self.state['attention'] + delta_attention_batch
-            #     )
-            #     self.state['association'] = (
-            #         self.state['association'] + delta_association_batch
-            #     )
-            #     delta_attention_batch = np.zeros([n_sequence, self.n_dim])
-            #     delta_association_batch = np.zeros(
-            #         [n_sequence, self.n_hidden, self.n_class]
-            #     )
-            # else:
-            #     delta_attention_batch = delta_attention_batch + delta_attention
-            #     delta_association_batch = delta_association_batch + delta_association
-
-            # Apply state updates.
-            self.state['association'] = (
-                self.state['association'] + delta_association
-            )
-            self.state['attention'] = np.maximum(
-                0, self.state['attention'] + delta_attention
-            )
-            # self.state['attention'] = project_attention(
-            #     self.state['attention'] + delta_attention,
-            #     attention_mode=self.attention_mode
-            # )
-
-        # Determine the probability the learner responds correctly.
-        prob_response_correct = copy.copy(prob_response)
-        incorrect_loc = np.logical_not(correct_category_loc)
-        prob_response_correct[incorrect_loc] = 0
-        prob_response_correct = np.sum(prob_response_correct, axis=1)
-
-        return prob_response, prob_response_correct
-
-    def _forward_pass(self, params_local, act_in):
-        """Propagate activity forward through the network.
-
-        "For a given input stimulus, each hidden node is activated
-        according to the psychological similarity of the stimulus to
-        the exemplar at the position of the hidden node (pg. 23)."
-
-        "Psychologically, the specificity of a hidden node indicates
-        the overall cognitive discriminability or memorability of
-        the corresponding exemplar (pg. 23)."
-
-        "The region of stimulus space that significantly activates a
-        hidden node will be loosely referred to as the node's
-        receptive field (pg. 23)."
-
-        Arguments:
-            params_local: Locally scoped free parameters.
-            act_in: Input activations.
-                shape = (n_seq, n_dim)
-
-        Returns:
-            act_hidden: Hidden unit activations.
-                shape = (n_seq, n_hidden)
-            act_out: Output unit activations.
-                shape = (n_seq, n_class)
-
-        """
-        theta = {
-            'rho': {'value': params_local['rho']},
-            'tau': {'value': params_local['tau']},
-            'beta': {'value': params_local['beta']},
-            'gamma': {'value': params_local['gamma']}
-        }
-        # Compute the activation of hidden exemplar nodes based on similarity.
-        # (Equation 1, pg. 23)
-        # act_in: (n_seq, n_dim)
-        # hidden_nodes: (n_hidden, n_dim)
-
-        # Take advantage of vectorization.
-        # act_in: (n_seq, n_dim, 1)
-        # hidden_nodes: (1, n_dim, n_hidden)
-        # attention: (n_seq, n_dim, 1)
-        act_in = np.expand_dims(act_in, axis=2)
-        z = np.expand_dims(np.transpose(self.z), axis=0)
-        attention = np.expand_dims(self.state["attention"], axis=2)
-        act_hidden = self._similarity(
-            act_in, z, theta, attention
-        )
-
-        # Compute the activation of the output (category) nodes.
-        # (Equation 2, pg. 24)
-        # NOTE: association: (n_seq, n_hidden_node, n_class)
-        # NOTE: Equivalent to doing the following for each sequence separately:
-        # (1, n_hidden) dot (n_hidden, n_class) => (1, n_class)
-        act_out = (
-            np.expand_dims(act_hidden, axis=2) * self.state["association"]
-        )
-        act_out = np.sum(act_out, axis=1)
-
-        return (act_hidden, act_out)
-
-    def _response_rule(self, params_local, act_out):
-        """Pass output_activation through soft-max response rule.
-
-        Arguments:
-            params_local: Locally scoped free parameters.
-            act_out:
-
-        """
-        # Map output (category) node activations to response probabilities.
-        # (Equation 3, pg. 24)
-        prob_response = psixy.utils.softmax(
-            params_local['phi'] * act_out, axis=1
-        )
-        return prob_response
-
-    def _compute_update(
-            self, params_local, act_in, act_hid, act_out,
-            correct_category_loc, do_update):
-        """Compute state updates for model (i.e., weights).
-
-        ALCOVE assumes that each presentation of a training exemplar is
-        followed by feedback indicating the correct response.
-        Formally, this is implemented using gradient decent on squared-
-        error.
-
-        Arguments:
-            params_local: Locally scoped free parameters.
-            act_in:
-            act_hid:
-            act_out:
-            correct_category_loc:
-            do_update:
-
-        Returns:
-            delta_attention: Updates to attention weights.
-            delta_association: Updates to association weights.
-
-        """
-        n_sequence = act_in.shape[0]
-
-        # Humble teacher values for each output node
-        # (Equation 4b, pg. 24)
-        teacher_value = self._humble_teacher(
-            act_out, correct_category_loc
-        )
-
-        # Compute change for the association weights
-        # (Equation 5, pg. 24)
-        output_diff = teacher_value - act_out
-        # output_diff: (n_seq, n_class)
-
-        # Known slow answer.
-        # n_sequence = act_in.shape[0]
-        # delta_association_0 = np.zeros(
-        #     [n_sequence, self.n_hidden, self.n_class]
-        # )
-        # for s_seq in range(n_sequence):
-        #     for j_hid in range(self.n_hidden):
-        #         for k_out in range(self.n_class):
-        #             delta_association_0[s_seq, j_hid, k_out] = (
-        #                 output_diff[s_seq, k_out] * act_hid[s_seq, j_hid]
-        #             )
-        # delta_association_0 = params_local['lambda_w'] * delta_association_0
-
-        # NOTE:
-        # delta_association: (n_seq, n_hidden, n_class)
-        # output_diff: (n_seq, n_class)
-        # act_hid: (n_seq, n_hidden)
-
-        # delta_association ~ (n_seq, n_hidden, n_class)
-        # Fastest implementation.
-        delta_association = np.zeros(
-            [n_sequence, self.n_hidden, self.n_class]
-        )
-        for s_seq in range(n_sequence):
-            delta_association[s_seq] = np.matmul(
-                np.expand_dims(act_hid[s_seq], axis=1),
-                np.expand_dims(output_diff[s_seq], axis=0)
-            )
-        delta_association = params_local['lambda_w'] * delta_association
-
-        # Move to test.
-        # np.testing.assert_almost_equal(delta_association_0, delta_association)
-
-        # Compute change for the attention weights
-        # (Equation 6, pg. 24)
-
-        # Known slow answer.
-        # delta_attention_0 = np.zeros([n_sequence, self.n_dim])
-        # for s_seq in range(n_sequence):
-        #     for i_dim in range(self.n_dim):
-        #         outer_sum = 0
-        #         for j_hid in range(self.n_hidden):
-        #             inner_sumk = 0
-        #             for k_out in range(self.n_class):
-        #                 inner_sumk = inner_sumk + (output_diff[s_seq, k_out] * self.state['association'][s_seq, j_hid, k_out])
-        #             outer_sum = outer_sum + (inner_sumk * act_hid[s_seq, j_hid] * params_local['beta'] * np.abs(self.z[j_hid, i_dim] - act_in[s_seq, i_dim]))
-        #         delta_attention_0[s_seq, i_dim] = outer_sum
-        # delta_attention_0 = -1 * params_local['lambda_a'] * delta_attention_0
-
-        # All sequences together.
-        # delta_attention = np.zeros([n_sequence, self.n_dim])
-        # for i_dim in range(self.n_dim):
-        #     outer_sum = 0
-        #     for j_hid in range(self.n_hidden):
-        #         inner_sumk = 0
-        #         for k_out in range(self.n_class):
-        #             inner_sumk = inner_sumk + (output_diff[:, k_out] * self.state['association'][:, j_hid, k_out])
-        #         outer_sum = outer_sum + (inner_sumk * act_hid[:, j_hid] * params_local['beta'] * np.abs(self.z[j_hid, i_dim] - act_in[:, i_dim]))
-        #     delta_attention[:, i_dim] = outer_sum
-        # delta_attention = -1 * params_local['lambda_a'] * delta_attention
-
-        # Intermediate version.
-        # delta_attention = np.zeros([n_sequence, self.n_dim])
-        # for i_dim in range(self.n_dim):
-        #     outer_sum = 0
-        #     for j_hid in range(self.n_hidden):
-        #         inner_sumk = np.sum(output_diff * self.state['association'][:, j_hid, :], axis=1)
-        #         outer_sum = outer_sum + (inner_sumk * act_hid[:, j_hid] * params_local['beta'] * np.abs(self.z[j_hid, i_dim] - act_in[:, i_dim]))
-        #     delta_attention[:, i_dim] = outer_sum
-        # delta_attention = -1 * params_local['lambda_a'] * delta_attention
-
-        # Intermediate version.
-        # delta_attention = np.zeros([n_sequence, self.n_dim])
-        # inner_sumk = np.sum(np.expand_dims(output_diff, axis=1) * self.state['association'], axis=2)
-        # for i_dim in range(self.n_dim):
-        #     outer_sum = 0
-        #     for j_hid in range(self.n_hidden):
-        #         outer_sum = outer_sum + (inner_sumk[:, j_hid] * act_hid[:, j_hid] * params_local['beta'] * np.abs(self.z[j_hid, i_dim] - act_in[:, i_dim]))
-        #     delta_attention[:, i_dim] = outer_sum
-        # delta_attention = -1 * params_local['lambda_a'] * delta_attention
-
-        # Intermediate version
-        # delta_attention = np.zeros([n_sequence, self.n_dim])
-        # inner_sumk = np.sum(np.expand_dims(output_diff, axis=1) * self.state['association'], axis=2)
-        # part_1 = params_local['beta'] * np.abs(
-        #     np.expand_dims(np.transpose(self.z), axis=0) - np.expand_dims(act_in, axis=2)
-        # )
-        # for i_dim in range(self.n_dim):
-        #     outer_sum = 0
-        #     for j_hid in range(self.n_hidden):
-        #         outer_sum = outer_sum + (inner_sumk[:, j_hid] * act_hid[:, j_hid] * part_1[:, i_dim, j_hid])
-        #     delta_attention[:, i_dim] = outer_sum
-        # delta_attention = -1 * params_local['lambda_a'] * delta_attention
-
-        # Fastest version.
-        # z: (n_hidden, n_dim)
-        # act_in: (n_seq, n_dim)
-        # act_hid: (n_seq, n_hidden)
-        delta_attention = np.zeros([n_sequence, self.n_dim])
-        inner_sumk = np.sum(np.expand_dims(output_diff, axis=1) * self.state['association'], axis=2)
-        part_1 = params_local['beta'] * np.abs(
-            np.expand_dims(np.transpose(self.z), axis=0) - np.expand_dims(act_in, axis=2)
-        )
-        # part_1: (n_seq, n_dim, n_hidden)
-        part_2 = inner_sumk * act_hid
-        # part_2: (n_seq, n_hidden)
-        part_3 = np.expand_dims(part_2, axis=1) * part_1
-        outer_sum = np.sum(part_3, axis=2)
-        delta_attention = -1 * params_local['lambda_a'] * outer_sum
-
-        # Move to test.
-        # np.testing.assert_almost_equal(delta_attention_0, delta_attention)
-        # print('here')
-
-        # inner_sumk = np.sum(np.expand_dims(output_diff, axis=1) * self.state['association'], axis=2)
-        # # inner_sumk: (n_seq, n_hidden)
-        # part_1 = params_local['beta'] * np.abs(
-        #     np.expand_dims(np.transpose(self.z), axis=0) - np.expand_dims(act_in, axis=2)
-        # )
-        # # part_1: (n_seq, n_dim, n_hidden)
-        # part_2 = np.expand_dims(act_hid, axis=1) * part_1
-        # # part_2: (n_seq, n_dim, n_hidden)
-        # part_3 = np.sum(np.expand_dims(inner_sumk, axis=1) + part_2, axis=2)
-        # # part_3: (n_seq, n_dim)
-        # delta_attention = -1 * params_local['lambda_a'] * part_3
-
-        # Only update state for certain sequences.
-        locs = np.logical_not(do_update)
-        delta_association[locs, :, :] = 0
-        delta_attention[locs, :] = 0
-
-        # if np.sum(np.logical_not(np.isfinite(delta_association))) > 0:
-        #     print('here')
-
-        # if np.sum(np.logical_not(np.isfinite(delta_attention))) > 0:
-        #     print('here')
-
-        return delta_attention, delta_association
-
-    def _similarity(self, z_q, z_r, theta, attention):
-        """Exponential family similarity kernel.
-
-        Arguments:
-            z_q: A set of embedding points.
-                shape = (n_trial, n_dim)
-            z_r: A set of embedding points.
-                shape = (n_trial, n_dim)
-            theta: A dictionary of algorithm-specific parameters
-                governing the similarity kernel.
-            attention: The weights allocated to each dimension
-                in a weighted minkowski metric.
-                shape = (n_trial, n_dim)
-
-        Returns:
-            The corresponding similarity between rows of embedding
-                points.
-                shape = (n_trial,)
-
-        """
-        # Algorithm-specific parameters governing the similarity kernel.
-        rho = theta['rho']["value"]
-        tau = theta['tau']["value"]
-        beta = theta['beta']["value"]
-        gamma = theta['gamma']["value"]
-
-        # Weighted Minkowski distance.
-        d_qref = (np.abs(z_q - z_r))**rho
-        d_qref = np.multiply(d_qref, attention)
-        d_qref = np.sum(d_qref, axis=1)**(1. / rho)
-
-        # Exponential family similarity kernel.
-        sim_qr = np.exp(np.negative(beta) * d_qref**tau) + gamma
-        return sim_qr
-        
-    def _humble_teacher(self, output_activation, correct_category_loc):
-        """Humble teacher values for each output node.
-
-        (Equation 4b, pg. 24)
-        """
-        teacher_value = np.minimum(-1, output_activation)
-        teacher_value[correct_category_loc] = np.maximum(1, output_activation[correct_category_loc])
-        return teacher_value
-
-    def _loss(
-            self, params_local, stimulus_sequence, behavior_sequence):
-        """Compute the negative log-likelihood of the data given model."""
-        (prob_response, prob_response_correct) = self._run(
-            params_local, stimulus_sequence
-        )
-
-        loc_response = determine_class_loc(
-            behavior_sequence.class_id, self.output_class_id
-        )
-
-        cap = 2.2204e-16
-        probs = np.maximum(cap, prob_response[loc_response])
-        # TODO sequence weighted version
-        # ll = np.sum(np.log(probs))
-        ll = np.mean(np.log(probs))
-
-        # if np.isnan(ll):
-            # print('here')
-            # ll = -np.inf
-
-        # avg_loss = coldcog.utils.logavg(loss_list)
-        # avg_acc = np.mean(acc_list)
-        # print("Avg LL: {0:.2f} Avg Acc: {6:.2f} | {1:.4f} {2:.4f} {3:.4f} {4:.4f} {5:.4f}".format(avg_loss, params[0], params[1], params[2], params[3], params[4], avg_acc))
-
-        # Compute accuracy. TODO
-        # is_correct = np.max(prob_response, 1) == prob_response_correct
-        # n_correct = sum(is_correct)
-        # n_total = len(is_correct)
-        # acc_list[seq_idx] = n_correct / n_total
-
-        return -1 * ll
-
-    def _loss_opt(
-            self, params_opt, stimulus_sequence, behavior_sequence):
-        """Compute the log-likelihood of the data given model.
-
-        Parameters are structured for using scipy.optimize.minimize.
-        """
-        params_local = {
-            'rho': params_opt[0],
-            'tau': params_opt[1],
-            'beta': params_opt[2],
-            'gamma': params_opt[3],
-            'phi': params_opt[4],
-            'lambda_w': params_opt[5],
-            'lambda_a': params_opt[6]
-        }
-        loss = self._loss(
-            params_local, stimulus_sequence, behavior_sequence
-        )
-        return loss
-
-    def _rand_param(self):
-        """Randomly sample parameter setting."""
-        param_0 = []
-        for bnd_set in self._get_bnds():
-            start = bnd_set[0]
-            width = bnd_set[1] - bnd_set[0]
-            param_0.append(start + (np.random.rand(1)[0] * width))
-        return param_0
-
-    def _get_bnds(self):
-        """Return bounds."""
-        bnds = [
-            self._params['rho']['bounds'],
-            self._params['tau']['bounds'],
-            self._params['beta']['bounds'],
-            self._params['gamma']['bounds'],
-            self._params['phi']['bounds'],
-            self._params['lambda_w']['bounds'],
-            self._params['lambda_a']['bounds'],
-        ]
-        return bnds
-
-
-class ALCOVE2(CategoryLearningModel):
-    """A tensorflow implimentation of ALCOVE (Kruschke, 1992).
-
-    Attributes:
-        params: Dictionary for the model's free parameters.
-            rho: Parameter governing the Minkowski metric [1,inf]
-            tau: Parameter governing the shape of the RBF [1,inf]
-            beta: the specificity of similarity [1,inf]
-            gamma: Governs degree to which similarity fades to
-                indifference.
-            phi: decision consistency [0,inf]
-            lambda_w: learning rate of association weights [0,inf]
-            lambda_a: learning rate of attention weights [0, inf]
-        state: Dictionary for the model's state.
-            attention:
-            association:
-
-    Methods:
-        fit:
-        evaluate:
-        predict:
-
-    References:
-    [1] Kruschke, J. K. (1992). ALCOVE: an exemplar-based connectionist
-        model of category learning. Psychological review, 99(1), 22-44.
-        http://dx.doi.org/10.1037/0033-295X.99.1.22.
-
-    """
-
-    def __init__(self, z, class_id, verbose=0):
-        """Initialize.
-
-        Arguments:
-            z: A two-dimension array denoting the location of the
-                hidden nodes in psychological space. Each row is
-                the representation corresponding to a single stimulus.
-                Each column corresponds to a distinct feature
-                dimension.
-            class_id: A list of class ID's. The order of this list
-                determines the output order of the model.
-            verbose (optional): Verbosity of output.
-
-        """
-        # Model constants.
-        self.name = "ALCOVE"
-        # At initialization, ALCOVE must know the locations of the RBFs and
-        # the unique classes.
-        self.z = z.astype(dtype=float)
+        self.z = z.astype(dtype=K.floatx())
         self.n_hidden = z.shape[0]
         self.n_dim = z.shape[1]
         self.output_class_id = self._check_class_id(class_id)
@@ -986,53 +242,80 @@ class ALCOVE2(CategoryLearningModel):
                 the fitted model.
 
         """
+        # TODO implement working fit method.
+    
         # Settings.
-        max_epoch = 100
-        batch_size = 10
+        max_epoch = 10
+        batch_size = stimulus_sequence.n_sequence  # TODO
         buffer_size = 10000
 
         # Prepare dataset.
         inputs = self._prepare_inputs(stimulus_sequence)
         targets = self._prepare_targets(behavior_sequence)
         seq_dataset = tf.data.Dataset.from_tensor_slices((inputs, targets))
-        # dataset = seq_dataset.batch(batch_size, drop_remainder=True)
         dataset = seq_dataset.shuffle(buffer_size).batch(batch_size, drop_remainder=True)
 
         theta = self._get_theta(self.params)  # TODO
-        model = self._build_tf_model(theta, batch_size)
+        model, rnn, initial_states = self._build_tf_model(
+            theta, stimulus_sequence.n_trial, batch_size
+        )
         model_parameters = list(theta.values())
+        model_parameters = model_parameters[4:]  # TODO
 
         optimizer = tf.keras.optimizers.Adam()
+
+        # @tf.function
+        def fix_gradient(grads):
+            for idx,  grad in enumerate(grads):
+                grads[idx] = tf.where(tf.math.is_nan(grad), tf.zeros_like(grad), grad)
+            return grads
 
         # @tf.function
         def train_step(input_batch, target_batch):
             with tf.GradientTape(watch_accessed_variables=False) as model_tape:
                 model_tape.watch(model_parameters)
-                prob_response_batch = model(input_batch)
+                logit_response_batch = model(input_batch)
                 loss = tf.keras.losses.categorical_crossentropy(
-                    target_batch, prob_response_batch
+                    target_batch, logit_response_batch, from_logits=True
                 )
+                # prob_response = tf.math.softmax(logit_response_batch, axis=2)
+                # prob_response_correct = prob_response * target_batch
+                # prob_response_correct = tf.reduce_sum(prob_response_correct, axis=2)
+                # loss = prob_response_correct
+                # loss = tf.reduce_sum(tf.math.log(prob_response_correct))
+                # loss = tf.reduce_mean(loss, axis=1)
+                # loss = tf.reduce_mean(loss, axis=0)
+                loss = tf.reduce_mean(loss)
             parameter_gradients = model_tape.gradient(loss, model_parameters)
-            optimizer.apply_gradients(zip(gradients, model_parameters))
+            for idx, grad in enumerate(parameter_gradients):
+                if grad is not None:
+                    print(
+                        '    {0}: {1:.6f} {2:.6g}'.format(
+                            model_parameters[idx].name,
+                            model_parameters[idx].numpy(), grad.numpy()
+                        )
+                    )
+            parameter_gradients = fix_gradient(parameter_gradients)
+            optimizer.apply_gradients(
+                zip(parameter_gradients, model_parameters)
+            )
             return loss
 
         loss_train = np.inf
         for i_epoch in range(max_epoch):
             start = time.time()
-
-            # initializing the hidden state at the start of every epoch
-            # initally hidden is None
-            hidden = model.reset_states()
-
             for (i_batch, (input_batch, target_batch)) in enumerate(dataset):
+                # Initialize the hidden state at the start of every batch
+                # since using stateful model.
+                rnn.reset_states(states=initial_states)
                 loss = train_step(input_batch, target_batch)
 
-                if i_batch % 100 == 0:
-                    template = 'Epoch {} Batch {} Loss {}'
-                    print(template.format(i_epoch + 1, i_batch, loss))
+                # if i_batch % 100 == 0:
+                template = 'Epoch {} Batch {} Loss {:.4f}'
+                print(template.format(i_epoch + 1, i_batch, loss))
 
-            print('Epoch {} Loss {:.4f}'.format(i_epoch + 1, loss))
-            print('Time taken for 1 epoch {} sec\n'.format(time.time() - start))
+            # print('Epoch {} Loss {:.4f}'.format(i_epoch + 1, loss))
+            # print('Time taken for 1 epoch {:.2f} sec\n'.format(time.time() - start))
 
         # ===================================================================
 
@@ -1085,7 +368,25 @@ class ALCOVE2(CategoryLearningModel):
     def predict(
             self, stimulus_sequence, group_id=None, mode='all',
             stateful=False, verbose=0):
-        """Predict behavior."""
+        """Predict behavior.
+
+        Arguments:
+            stimulus_sequence. A psixy.sequence.StimulusSequence
+                object.
+            group_id: TODO
+            mode: Determines which response probabilities to return.
+                Can be 'all' or 'correct'. If 'all', then response
+                probabilities for all output categories will be
+                returned. If 'correct', only returns the response
+                probabilities for the the correct category.
+            stateful: TODO
+            verbose: Integer indicating verbosity of outout.
+
+        Returns:
+            res: A Tensorflow.Tensor object containing response
+                probabilities. TODO
+
+        """
         # Settings
         batch_size = stimulus_sequence.n_sequence  # TODO handle smaller batches
         buffer_size = 10000
@@ -1097,12 +398,17 @@ class ALCOVE2(CategoryLearningModel):
         dataset = seq_dataset.batch(batch_size, drop_remainder=True)
 
         theta = self._get_theta(self.params)
-        model = self._build_tf_model(theta, batch_size)
+        model, _, _ = self._build_tf_model(
+            theta, stimulus_sequence.n_trial, batch_size
+        )
 
         for input_batch in dataset.take(1):
-            prob_response_batch = model(input_batch)
+            logit_response_batch = model(input_batch)
 
-        prob_response = prob_response_batch
+        logit_response = logit_response_batch
+
+        # Convert logits to probabilities.
+        prob_response = tf.math.softmax(logit_response, axis=2)
 
         if mode == 'correct':
             stimuli_labels = self._convert_labels(stimulus_sequence.class_id)
@@ -1147,7 +453,7 @@ class ALCOVE2(CategoryLearningModel):
     def _prepare_inputs(self, stimulus_sequence):
         """Prepare inputs for TensorFlow model."""
         # [n_sequence, n_trial, n_dim]
-        stimulus_z = stimulus_sequence.z.astype(dtype=np.float32)
+        stimulus_z = stimulus_sequence.z.astype(dtype=K.floatx())
         # [n_sequence, n_output]
         stimulus_labels = self._convert_labels(stimulus_sequence.class_id)
         stimulus_labels_one_hot = tf.one_hot(
@@ -1166,20 +472,33 @@ class ALCOVE2(CategoryLearningModel):
         targets = behavior_labels_one_hot
         return targets
 
-    def _build_tf_model(self, theta, batch_size):
+    def _build_tf_model(self, theta, n_timestep, batch_size):
         """Build tensorflow RNN model."""
-        z_hidden = self.z.astype(dtype=np.float32)
+        print('Build Model')
+        z_hidden = self.z.astype(dtype=K.floatx())
         n_output = self.n_class
 
-        cell = ALCOVECell(theta, z_hidden, n_output, batch_size)
-        rnn = tf.keras.layers.RNN(cell, return_sequences=True)
-
-        n_input = z_hidden.shape[1]
-        inp_1 = tf.keras.Input((None, n_input))
-        inp_2 = tf.keras.Input((None, n_output))
+        n_hidden = z_hidden.shape[0]
+        n_dim = z_hidden.shape[1]
+        attention = np.ones([batch_size, n_dim], dtype=K.floatx()) / n_dim
+        association = np.zeros(
+            [batch_size, n_hidden, n_output], dtype=K.floatx()
+        )
+        initial_states = [attention, association]
+        cell = ALCOVECell(theta, z_hidden, n_output, batch_size=batch_size)
+        rnn = tf.keras.layers.RNN(
+            cell, return_sequences=True, stateful=True
+        )
+        # TODO what shape information is actually necessary?
+        # TODO Is timestep still necessary?
+        inp_1 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_dim))  # shape=(None, n_dim), batch_size=batch_size
+        inp_2 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_output))  # shape=(None, n_output), batch_size=batch_size
         output = rnn(NestedInput(z_in=inp_1, one_hot_label=inp_2))
         model = tf.keras.models.Model([inp_1, inp_2], output)
-        return model
+
+        rnn.reset_states(states=initial_states)
+
+        return model, rnn, initial_states
 
     def _convert_labels(self, labels):
         """Convert labels."""
@@ -1193,40 +512,52 @@ class ALCOVE2(CategoryLearningModel):
         """Return theta."""
         # TODO this isn't quite right.
         theta = {
-            'rho': tf.Variable(
-                initial_value=params_local['rho'],
-                trainable=True, constraint=NonNeg(),
-                dtype='float32', name='rho'
+            'rho': tf.constant(
+                params_local['rho'], dtype=K.floatx(), name='rho'
             ),
-            'tau': tf.Variable(
-                initial_value=params_local['tau'],
-                trainable=True, constraint=NonNeg(),
-                dtype='float32', name='tau'
+            'tau': tf.constant(
+                params_local['tau'], dtype=K.floatx(), name='tau'
             ),
-            'beta': tf.Variable(
-                initial_value=params_local['beta'],
-                trainable=True, constraint=NonNeg(),
-                dtype='float32', name='beta'
+            'beta': tf.constant(
+                params_local['beta'], dtype=K.floatx(), name='beta'
             ),
-            'gamma': tf.Variable(
-                initial_value=params_local['gamma'],
-                trainable=True, constraint=NonNeg(),
-                dtype='float32', name='gamma'
+            'gamma': tf.constant(
+                params_local['gamma'], dtype=K.floatx(), name='gamma'
             ),
+            # 'rho': tf.Variable(
+            #     initial_value=params_local['rho'],
+            #     trainable=False, constraint=GreaterEqualThan(min_value=1.),
+            #     dtype=K.floatx(), name='rho'
+            # ),
+            # 'tau': tf.Variable(
+            #     initial_value=params_local['tau'],
+            #     trainable=False, constraint=GreaterEqualThan(min_value=1.),
+            #     dtype=K.floatx(), name='tau'
+            # ),
+            # 'beta': tf.Variable(
+            #     initial_value=params_local['beta'],
+            #     trainable=False, constraint=GreaterEqualThan(min_value=1.),
+            #     dtype=K.floatx(), name='beta'
+            # ),
+            # 'gamma': tf.Variable(
+            #     initial_value=params_local['gamma'],
+            #     trainable=False, constraint=NonNeg(),
+            #     dtype=K.floatx(), name='gamma'
+            # ),
             'phi': tf.Variable(
                 initial_value=params_local['phi'],
                 trainable=True, constraint=NonNeg(),
-                dtype='float32', name='phi'
+                dtype=K.floatx(), name='phi'
             ),
             'lambda_a': tf.Variable(
                 initial_value=params_local['lambda_a'],
                 trainable=True, constraint=NonNeg(),
-                dtype='float32', name='lambda_a'
+                dtype=K.floatx(), name='lambda_a'
             ),
             'lambda_w': tf.Variable(
                 initial_value=params_local['lambda_w'],
                 trainable=True, constraint=NonNeg(),
-                dtype='float32', name='lambda_w'
+                dtype=K.floatx(), name='lambda_w'
             )
         }
         return theta
@@ -1257,13 +588,15 @@ class ALCOVE2(CategoryLearningModel):
 # @tf.function
 def alcove_loss(desired_y, predicted_y):
     """ALCOVE loss."""
-    teacher_y_min = tf.minimum(-1.0, predicted_y)
+    min_val = math_ops.cast(-1.0, K.floatx())
+    teacher_y_min = tf.minimum(min_val, predicted_y)
 
     # Zero out correct locations.
     teacher_y = teacher_y_min - tf.multiply(desired_y, teacher_y_min)
 
     # Add in correct locations.
-    teacher_y_max = tf.maximum(1.0, predicted_y)
+    max_val = math_ops.cast(1.0, K.floatx())
+    teacher_y_max = tf.maximum(max_val, predicted_y)
     teacher_y = teacher_y + tf.multiply(desired_y, teacher_y_max)
 
     # Sum over outputs.
@@ -1287,40 +620,16 @@ class ALCOVECell(Layer):
         self.n_dim = coordinates.shape[1]
         self.n_hidden = coordinates.shape[0]
         self.n_output = n_output
-        self.state_size = coordinates.shape[0]
         self.state_size = NestedState(
             state1=tf.TensorShape([self.n_dim]),
             state2=tf.TensorShape([self.n_hidden, self.n_output])
         )
         self.rbf = WeightedMinkowski(coordinates, theta['rho'])
         self.batch_size = batch_size
-        self.weight = np.ones([batch_size, self.n_dim]) / self.n_dim  # TODO other weight options
         super(ALCOVECell, self).__init__(**kwargs)
+        print('  ACLOVECell init')
 
-    def build(self, input_shapes):
-        """Build.
-
-        Arguments:
-            input_shapes: Expect input_shapes to contain 2 items:
-                z: (batch, n_dim) and one_hot_label: (batch, n_output)]
-
-        """
-        # z_in = input_shapes.z_in[1]
-        # one_hot_label = input_shapes.one_hot_label[1]
-        self.attention = self.add_weight(
-            shape=(self.batch_size, self.n_dim),
-            initializer=constant_initializer(self.weight),
-            constraint=NonNeg(),
-            trainable=True,
-            name='attention'
-        )
-        # TODO is the initializer bad? should I try jitter around zero?
-        self.association = self.add_weight(
-            shape=(self.batch_size, self.n_hidden, self.n_output),
-            initializer='zeros',
-            name='association')
-        self.built = True
-
+    # @tf.function
     def call(self, inputs, states):
         """Call.
 
@@ -1330,42 +639,55 @@ class ALCOVECell(Layer):
                 one_hot_label: shape=(batch, n_output)]
 
         """
+        # print('    ALCOVECell call') TODO remove
+
         z_in, one_hot_label = tf.nest.flatten(inputs)
+        attention, association = states
 
-        # Update state.
-        delta_attention, delta_association = states
-        a = self.attention - self.theta['lambda_a'] * delta_attention
-        a = tf.math.maximum(a, 0)
-        self.attention.assign(a)
-        self.association.assign(self.association - self.theta['lambda_w'] * delta_association)
-
-        state_variables = [self.attention, self.association]
+        # Auto-diff version.
+        state_variables = [attention, association]
         with tf.GradientTape(watch_accessed_variables=False, persistent=True) as state_tape:
             state_tape.watch(state_variables)
             # Compute RBF activations.
-            d = self.rbf(z_in, self.attention)
+            d = self.rbf(z_in, attention)
             s = tf.exp(
                 tf.negative(self.theta['beta']) * tf.pow(d, self.theta['tau'])
             ) + self.theta['gamma']
             # Compute output activations.
             # Convert to shape=(batch_size, n_hidden, n_output)
             s2 = tf.expand_dims(s, axis=2)
-            x2 = tf.multiply(s2, self.association)
+            x2 = tf.multiply(s2, association)
             x_out = tf.reduce_sum(x2, axis=1)
             # Compute ALCOVE loss.
             loss = alcove_loss(one_hot_label, x_out)
-        dl_da = state_tape.gradient(loss, self.attention)
-        dl_dw = state_tape.gradient(loss, self.association)
+        dl_da = state_tape.gradient(loss, attention)
+        dl_dw = state_tape.gradient(loss, association)
         del state_tape
 
-        # Response rule.
-        p = tf.multiply(x_out, self.theta['phi'])
-        p = tf.math.softmax(p, axis=1)
+        # dl_da = 0
+        # dl_dw = 0
+
+        # tf.debugging.check_numerics(
+        #     dl_da,
+        #     'Check numerics `dl_da` in ALCOVECell.call',
+        #     name='check_alcovecell_call'
+        # )
+        # Handle nan's. TODO where are the nan's coming from?
+        # locs = tf.math.is_nan(dl_da)
+        # dl_da = tf.where(locs, tf.zeros(dl_da.shape), dl_da)
+
+        # Response rule (keep as logits).
+        x_out_scaled = tf.multiply(x_out, self.theta['phi'])
+
+        # Update states.
+        new_attention = attention - self.theta['lambda_a'] * dl_da
+        new_attention = tf.math.maximum(new_attention, 0)
+        new_association = association - self.theta['lambda_w'] * dl_dw
 
         new_states = NestedState(
-            state1=dl_da, state2=dl_dw
+            state1=new_attention, state2=new_association
         )
-        return p, new_states
+        return x_out_scaled, new_states
 
 
 class WeightedMinkowski(Layer):
@@ -1382,6 +704,7 @@ class WeightedMinkowski(Layer):
         self.n_hidden = coordinates.shape[0]
         self.n_dim = coordinates.shape[1]
         self.rho = rho
+        # self.dist_qr_0 = tf.zeros((2, self.n_hidden, self.n_dim))  # TODO
 
     def call(self, z_in, attention):
         """Call.
@@ -1424,36 +747,57 @@ class WeightedMinkowski(Layer):
 
         """
         # Weighted Minkowski distance.
-        dist_qr = tf.pow(tf.abs(z_q - z_r), self.rho)
-        dist_qr = tf.multiply(dist_qr, a)
-        dist_qr = tf.pow(tf.reduce_sum(dist_qr, axis=-1), tf.divide(1., self.rho))
-        return dist_qr
+        dist_qr_0 = tf.pow(tf.abs(z_q - z_r), self.rho)
+        dist_qr_1 = tf.multiply(dist_qr_0, a)
+        dist_qr_2 = tf.pow(tf.reduce_sum(dist_qr_1, axis=-1), tf.math.divide(1., self.rho))
+
+        tf.debugging.check_numerics(
+            dist_qr_2,
+            'Check numerics `dist_qr` in _minkowski distance',
+            name='check_minkowski'
+        )
+        return dist_qr_2
+
+
+class GreaterEqualThan(Constraint):
+    """Constrains the weights to be greater than a specified value."""
+
+    def __init__(self, min_value=0.):
+        """Initialize."""
+        self.min_value = min_value
+
+    def __call__(self, w):
+        """Call."""
+        w_adj = w - self.min_value
+        w2 = w_adj * math_ops.cast(math_ops.greater_equal(w_adj, 0.), K.floatx())
+        w2 = w2 + self.min_value
+        return w2
 
 
 def determine_class_loc(class_id, output_class_id):
-        """Determine output locations.
+    """Determine output locations.
 
-        Arguments:
-            class_id: (n_seq, n_trial)
-            output_class_id: (n_class,)
+    Arguments:
+        class_id: (n_seq, n_trial)
+        output_class_id: (n_class,)
 
-        Returns:
-            loc_class: The corresponding location.
-                (n_seq, n_class, n_trial)
+    Returns:
+        loc_class: The corresponding location.
+            (n_seq, n_class, n_trial)
 
-        """
-        n_class = len(output_class_id)
+    """
+    n_class = len(output_class_id)
 
-        n_sequence = class_id.shape[0]
-        n_trial = class_id.shape[1]
-        loc_class = np.zeros(
-            [n_sequence, n_trial, n_class], dtype=bool
-        )
-        for idx, i_class in enumerate(output_class_id):
-            locs = np.equal(class_id, i_class)
-            loc_class[locs, idx] = True
-        loc_class = np.swapaxes(loc_class, 1, 2)
-        return loc_class
+    n_sequence = class_id.shape[0]
+    n_trial = class_id.shape[1]
+    loc_class = np.zeros(
+        [n_sequence, n_trial, n_class], dtype=bool
+    )
+    for idx, i_class in enumerate(output_class_id):
+        locs = np.equal(class_id, i_class)
+        loc_class[locs, idx] = True
+    loc_class = np.swapaxes(loc_class, 1, 2)
+    return loc_class
 
 
 def project_attention(attention_in, attention_mode='classic'):
@@ -1461,9 +805,11 @@ def project_attention(attention_in, attention_mode='classic'):
 
     Arguments:
         attention_in: Incoming attention weights.
+        attention_mode:
 
-    Returns;
+    Returns:
         attention_out: Projected attention weights.
+
     """
     # Settings.
     cap = 2.2204e-16
@@ -1491,9 +837,8 @@ def project_attention(attention_in, attention_mode='classic'):
     if np.sum(np.equal(attention_sum, 0)) > 0:
         print('here')
 
-    if np.sum(np.logical_not(np.isfinite(attention_out))) > 0:
-        print('here')
-
+    # if np.sum(np.logical_not(np.isfinite(attention_out))) > 0:
+    #     print('bad attention projection')
     # attention_sum = np.sum(attention_0, axis=1)
     # locs = np.logical_not(np.isfinite(attention_sum))
     # attention[locs, :] = 1
