@@ -79,6 +79,7 @@ class Catalog(object):
                 shape=(n_stimuli, n_task)
             class_label (optional): A dictionary mapping between each
                 (integer) class_id and a (string) label.
+
         """
         # Set stimulus ID.
         self.stimulus_id = self._check_stimulus_id(stimulus_id)
