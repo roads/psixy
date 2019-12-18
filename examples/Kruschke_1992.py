@@ -66,7 +66,6 @@ def create_figure_5(fp_fig_5):
 
     catalog, feature_matrix = psixy.catalog.shepard_hovland_jenkins_1961_catalog()
     class_list = np.array([0, 1], dtype=int)
-    # TODO move `class_list` inside catalog?
 
     # Model without attention.
     model_0 = psixy.models.ALCOVE(feature_matrix, class_list)
@@ -90,7 +89,8 @@ def create_figure_5(fp_fig_5):
     accuracy_epoch_attn = np.zeros([catalog.n_task, n_epoch])
     for i_task in range(catalog.n_task):
         stimulus_sequence = generate_fig5_stimulus_sequences(
-            catalog.task(task_idx=i_task), feature_matrix, n_sequence, n_epoch
+            catalog.task(task_idx=i_task)['class_id'], feature_matrix,
+            n_sequence, n_epoch
         )
 
         prob_correct_attn = model_attn.predict(
@@ -168,7 +168,7 @@ def create_figure_14(fp_fig_14):
     model_attn.params['lambda_a'] = 0.010
 
     stimulus_sequence = generate_fig_14_stimulus_sequences(
-        catalog.task(), feature_matrix, n_sequence, n_epoch
+        catalog.task()['class_id'], feature_matrix, n_sequence, n_epoch
     )
 
     prob_correct_attn = model_attn.predict(stimulus_sequence, mode='correct')

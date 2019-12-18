@@ -25,8 +25,8 @@ Functions:
         object.
 
 TODO:
+    * MAYBE task should return a dictionary with task related info?
     * MAYBE allow user to specify label to access relevant data
-    * MAYBE move `class_list` inside catalog?
     * MAYBE allow class_id's to be whatever the user wants, then
         class_labels is just a flat mapping
 
@@ -261,7 +261,10 @@ class Catalog(object):
 
     def task(self, task_idx=0):
         """Return class IDs associated with task."""
-        return self.class_id[:, task_idx]
+        task_info = {
+            'class_id': self.class_id[:, task_idx]
+        }
+        return task_info
 
     def fullpath(self):
         """Return full stimuli filepaths."""
