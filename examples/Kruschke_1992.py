@@ -14,8 +14,9 @@
 # limitations under the License.
 # ==============================================================================
 
-"""Reproduce Figure 5 from Kruschke, 1992.
+"""Reproduce Figure 5 and Figure 14 from Kruschke, 1992.
 
+Figure 5 Description (pg. 27):
 Each datum shows the probability of selecting the correct category,
 averaged across the eight exemplars within an epoch. For both graphs,
 the response mapping constant was set to phi = 2.0, the specificity was
@@ -24,11 +25,14 @@ lambda_w = 0.03. In Figure 5A, there was no attention learning
 (lambda_a = 0.0), and it can be seen that Type II is learned much too
 slowly. In Figure 5B, the attention-learning rate was raised to
 lambda_a = 0.0033, and consequently Type II was learned second fastest,
-as observed in human data. (pg. 27)
+as observed in human data.
+
+Figure 14 Description:
+TODO
 
 References:
-    [1] Kruschke, J. K. (1992). ALCOVE: an exemplar-based connectionist model
-        of category learning. Psychological review, 99(1), 22-44.
+    [1] Kruschke, J. K. (1992). ALCOVE: an exemplar-based connectionist
+        model of category learning. Psychological Review, 99(1), 22-44.
         http://dx.doi.org/10.1037/0033-295X.99.1.22.
 
 """
@@ -52,17 +56,17 @@ def main():
     fp_fig_14 = Path('examples', 'kruschke_1992_fig_14.pdf')
 
     create_figure_5(fp_fig_5)
-    # create_figure_14(fp_fig_14)
+    create_figure_14(fp_fig_14)
 
 
 def create_figure_5(fp_fig_5):
     """Create figure 5."""
     n_sequence = 10
     n_epoch = 50
-    task_label_list = ['I', 'II', 'III', 'IV', 'V', 'VI']
 
-    catalog, feature_matrix = shepard_hovland_jenkins_1961_catalog()
+    catalog, feature_matrix = psixy.catalog.shepard_hovland_jenkins_1961_catalog()
     class_list = np.array([0, 1], dtype=int)
+    # TODO move `class_list` inside catalog?
 
     # Model without attention.
     model_0 = psixy.models.ALCOVE(feature_matrix, class_list)
@@ -119,7 +123,7 @@ def create_figure_5(fp_fig_5):
             accuracy_epoch_0[i_task, :],
             marker='o', markersize=3,
             c=color_array[i_task, :],
-            label='{0}'.format(task_label_list[i_task])
+            label='{0}'.format(catalog.task_label[i_task])
         )
     ax.set_xlabel('epoch')
     ax.set_ylabel('Pr(correct)')
@@ -132,7 +136,7 @@ def create_figure_5(fp_fig_5):
             accuracy_epoch_attn[i_task, :],
             marker='o', markersize=3,
             c=color_array[i_task, :],
-            label='{0}'.format(task_label_list[i_task])
+            label='{0}'.format(catalog.task_label[i_task])
         )
     ax.set_xlabel('epoch')
     ax.set_ylabel('Pr(correct)')
@@ -151,7 +155,7 @@ def create_figure_14(fp_fig_14):
     n_epoch = 50
     n_stimuli_per_epoch = 20
 
-    catalog, feature_matrix, stimulus_label = rules_exceptions_catalog()
+    catalog, feature_matrix, stimulus_label = psixy.catalog.rules_exceptions_catalog()
     class_list = np.array([0, 1], dtype=int)
 
     # Model without attention.
@@ -249,75 +253,6 @@ def epoch_analysis_stimulus(
             epoch_avg[i_stim, i_epoch] = np.mean(prob_response_2_epoch[locs])
 
     return epoch_avg
-
-
-def shepard_hovland_jenkins_1961_catalog():
-    """Generate catalog."""
-    stimulus_id = np.array([0, 1, 2, 3, 4, 5, 6, 7])
-    filepath = [
-        '0.jpg', '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6jpg', '7.jpg'
-    ]
-    class_id = np.array([
-        [0, 0, 0, 0, 1, 1, 1, 1],
-        [0, 0, 1, 1, 1, 1, 0, 0],
-        [0, 0, 0, 1, 1, 0, 1, 1],
-        [0, 0, 0, 1, 0, 1, 1, 1],
-        [0, 0, 0, 1, 1, 1, 1, 0],
-        [0, 1, 1, 0, 1, 0, 0, 1]
-    ])
-    class_id = np.transpose(class_id)
-    catalog = psixy.catalog.Catalog(stimulus_id, filepath, class_id=class_id)
-
-    feature_matrix = np.array([
-        [0, 0, 0],
-        [0, 0, 1],
-        [0, 1, 0],
-        [0, 1, 1],
-        [1, 0, 0],
-        [1, 0, 1],
-        [1, 1, 0],
-        [1, 1, 1],
-    ])
-
-    return catalog, feature_matrix
-
-
-def rules_exceptions_catalog():
-    """Return a rules and exception category structure."""
-    n_stimuli = 14
-    stimulus_id = np.arange(n_stimuli)
-    filepath = [
-        '0.jpg', '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6jpg',
-        '7.jpg', '8.jpg', '9.jpg', '10.jpg', '11.jpg', '12.jpg', '13.jpg'
-    ]
-    class_id = np.array([
-        [0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1]
-    ])
-    class_id = np.transpose(class_id)
-    catalog = psixy.catalog.Catalog(stimulus_id, filepath, class_id=class_id)
-
-    feature_matrix = np.array([
-        [1, 1],
-        [2, 1],
-        [3, 1],
-        [1, 3],
-        [2, 3],
-        [3, 3],
-        [1, 4.4],
-        [3, 4.6],
-        [1, 6],
-        [2, 6],
-        [3, 6],
-        [1, 8],
-        [2, 8],
-        [3, 8],
-    ])
-
-    stimulus_label = np.array([
-        'A_1', 'A_2', 'A_3', 'A_4', 'A_5', 'A_6', 'B_e',
-        'A_e', 'B_6', 'B_5', 'B_4', 'B_3', 'B_2', 'B_1',
-    ])
-    return catalog, feature_matrix, stimulus_label
 
 
 def generate_fig5_stimulus_sequences(
