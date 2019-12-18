@@ -17,19 +17,12 @@
 """Module for formatting stimulus data into a standardized catalog.
 
 Classes:
-    Catalog: An object for keeping track of stimuli, stimuli filepaths
-        and stimuli class labels.
+    Catalog: An object for keeping track of stimulus IDs and stimulus
+        filepaths.
 
 Functions:
     load_catalog: Load a hdf5 file as a psixy.models.Catalog
         object.
-
-TODO:
-    * MAYBE task should return a dictionary with task related info?
-    * MAYBE allow user to specify label to access relevant data
-    * MAYBE allow class_id's to be whatever the user wants, then
-        class_labels is just a flat mapping
-
 
 """
 
@@ -41,31 +34,22 @@ import numpy as np
 
 
 class Catalog(object):
-    """Class to keep track of stimuli information.
+    """Class to manage stimuli information.
 
     Attributes:
         n_stimuli:  Integer indicating number of unique stimuli.
-        stimulus_id: A integer array indicating the unique stimulus IDs.
-            shape=(n_stimuli,)
         filepath: A list of pathlib.Path objects indicating the
             corresponding filepath for each stimulus. Note that this is
-            a list of paths relative to a common filepath shared by all
-            stimuli.
+            a list of paths relative to an (optional) common filepath
+            shared by all stimuli.
             len=n_stimuli
         common_path: A pathlib.Path object indicating the common
             filepath (if any).
-        class_id: An integer array indicating the corresponding class
-            ID.
-            shape=(n_stimuli, n_task)
-        n_task: Integer indicating number of classification tasks
-            defined for the catalog.
-        class_label: A dictionary mapping between the (integer)
-            class_id and a (string) label.
-        version: A string indicating the version of the class to
-            facilitate loading old class version.
+        stimulus_id: A non-negative integer array indicating the
+            unique stimulus IDs.
+            shape=(n_stimuli,)
 
     Methods:
-        task: Return class IDs associated with a particular task.
         fullpath: Return the full filepath for the stimuli.
         save: Save the catalog to disk using hdf5 format.
         subset: Return a subset of the catalog.
@@ -73,87 +57,30 @@ class Catalog(object):
     """
 
     def __init__(
-            self, stimulus_id, filepath, class_id=None, class_label=None,
-            task_label=None):
+            self, filepath, common_path=None, stimulus_id=None):
         """Initialize.
 
         Arguments:
-            stimulus_id: A 1D integer array.
-                shape=(n_stimuli,)
             filepath: A list of strings or pathlib.Path objects.
                 len=n_stimuli
-            class_id (optional): A ND integer array.
-                shape=(n_stimuli, n_task)
-            class_label (optional): A dictionary mapping between each
-                (integer) class_id and a (string) label.
-            task_label (optional): A list of string labels for each
-                task. This length of the list must equal the number
-                of tasks.
+            stimulus_id (optional): A 1D non-negative integer NumPy
+                array composed of all unique values. The integers do
+                not need to be consecutive.
+                shape=(n_stimuli,)
 
         """
-        # Set stimulus ID.
-        self.stimulus_id = self._check_stimulus_id(stimulus_id)
-        self.n_stimuli = len(stimulus_id)
+        # Set number of stimuli.
+        self.n_stimuli = len(filepath)
 
         # Set file paths.
-        # self.common_path = os.path.commonpath(filepath)  TODO
         self.filepath = self._check_filepath(filepath)
-        self._common_path = Path('.')
+        if common_path is None:
+            common_path = Path('.')
+        self._common_path = Path(common_path)
 
-        # Set class_id.
-        if class_id is None:
-            class_id = np.zeros([self.n_stimuli, 1], dtype=int)
-        else:
-            class_id = self._check_class_id(class_id)
-        self.class_id = class_id
-        self.n_task = class_id.shape[1]
-
-        # Set class label mapping.
-        # TODO how should this work for cases with more than one task?
-        if class_label is None:
-            # Make the label the ID.
-            class_label = {}
-            class_id_unique = np.unique(self.class_id)
-            for class_id in class_id_unique:
-                class_label[class_id] = '{0}'.format(class_id)
-        else:
-            class_label = self._check_class_label(class_label)
-        self.class_label = class_label
-
-        self.task_label = self._check_task_label(task_label)
-
-        self.version = '0.1.0'
-
-    def _check_stimulus_id(self, stimulus_id):
-        """Check `stimulus_id` argument.
-
-        Returns:
-            stimulus_id
-
-        Raises:
-            ValueError
-
-        """
-        if len(stimulus_id.shape) != 1:
-            raise ValueError((
-                "The argument `stimulus_id` must be a 1D array of "
-                "integers."))
-
-        if not issubclass(stimulus_id.dtype.type, np.integer):
-            raise ValueError((
-                "The argument `stimulus_id` must be a 1D array of "
-                "integers."))
-
-        n_stimuli = len(stimulus_id)
-
-        is_contiguous = False
-        if np.array_equal(np.unique(stimulus_id), np.arange(0, n_stimuli)):
-            is_contiguous = True
-        if not is_contiguous:
-            raise ValueError((
-                'The argument `stimulus_id` must contain a contiguous set of '
-                'integers [0, n_stimuli[.'))
-        return stimulus_id
+        # Set stimulus IDs.
+        self.stimulus_id = self._check_stimulus_id(stimulus_id)
+        self._version = '0.1.0'
 
     def _check_filepath(self, filepath):
         """Check `filepath` argument.
@@ -165,93 +92,63 @@ class Catalog(object):
             ValueError
 
         """
-        if len(filepath) != self.n_stimuli:
-            raise ValueError((
-                'The argument `filepath` must have the same length as '
-                '`stimulus_id`.'))
-
         path_list = []
         for i_file in filepath:
             path_list.append(Path(i_file))
-
         return path_list
 
-    def _check_class_id(self, class_id):
-        """Check `class_id` argument.
+    def _check_stimulus_id(self, stimulus_id):
+        """Check `stimulus_id` argument.
 
         Returns:
-            class_id
+            stimulus_id
 
         Raises:
             ValueError
 
         """
-        if len(class_id.shape) == 1:
-            class_id = np.expand_dims(class_id, 1)
+        if stimulus_id is None:
+            stimulus_id = np.arange(self.n_stimuli)
 
-        if len(class_id.shape) > 2:
+        if len(stimulus_id.shape) != 1:
             raise ValueError((
-                "The argument `stimulus_id` must be a 1D or 2D array "
-                "of integers."
+                "The argument `stimulus_id` must be a NumPy 1D array of "
+                "non-negative integers. The array you supplied is "
+                "not 1D."
             ))
 
-        if not issubclass(class_id.dtype.type, np.integer):
+        if len(stimulus_id) != self.n_stimuli:
             raise ValueError((
-                "The argument `stimulus_id` must be an ND array of "
-                "integers."))
+                'The argument `stimulus_id` must have the same length as '
+                '`filepath`.'
+            ))
 
-        return class_id
+        if not issubclass(stimulus_id.dtype.type, np.integer):
+            raise ValueError((
+                "The argument `stimulus_id` must be a 1D NumPy array of "
+                "unique non-negative integers. The array you supplied is not "
+                "composed of integers."
+            ))
 
-    def _check_class_label(self, class_label):
-        """Check `class_label` argument.
+        if np.sum(np.less(stimulus_id, 0)) > 0:
+            raise ValueError((
+                "The argument `stimulus_id` must be a 1D NumPy array of "
+                "unique non-negative integers. The array you supplied is not "
+                "non-negative."
+            ))
 
-        Returns:
-            class_label
+        if len(np.unique(stimulus_id)) != self.n_stimuli:
+            raise ValueError((
+                "The argument `stimulus_id` must be a 1D NumPy array of "
+                "unique non-negative integers. The array you supplied is not "
+                "composed of unique values."
+            ))
 
-        Raises:
-            ValueError
-
-        """
-        # Check to make sure there is a label for all class IDs.
-        class_id_unique = np.unique(self.class_id)
-        for class_id in class_id_unique:
-            if not (class_id in class_label):
-                raise ValueError((
-                    "The argument `class_label` must contain a label "
-                    "for all class IDs. Missing label for "
-                    "class_id={0}.".format(class_id)
-                ))
-        return class_label
-
-    def _check_task_label(self, task_label):
-        """Check `task_label` argument.
-
-        Returns:
-            task_label
-
-        Raises:
-            ValueError
-
-        """
-        # TODO handle defaults.
-        if task_label is None:
-            task_label = np.arange(self.n_task)
-            task_label = task_label.astype(str)
-            # TODO test
-        else:
-            n_provided = len(task_label)
-            if n_provided != self.n_task:
-                raise ValueError((
-                    "The argument `task_label` must contain a label for all "
-                    "tasks. You have only provided {0} labels but need to "
-                    "provide {1} labels.".format(n_provided, self.n_task)
-                ))
-            # TODO test valid and invalid
-        return task_label
+        return stimulus_id
 
     @property
     def common_path(self):
-        """Getter method for phi."""
+        """Getter method for common_path."""
         return self._common_path
 
     @common_path.setter
@@ -259,15 +156,8 @@ class Catalog(object):
         """Setter method for common_path."""
         self._common_path = Path(c)
 
-    def task(self, task_idx=0):
-        """Return class IDs associated with task."""
-        task_info = {
-            'class_id': self.class_id[:, task_idx]
-        }
-        return task_info
-
     def fullpath(self):
-        """Return full stimuli filepaths."""
+        """Return list of complete stimuli filepaths."""
         file_path_list = self.filepath
         file_path_list = [
             self.common_path / i_file for i_file in file_path_list
@@ -278,7 +168,8 @@ class Catalog(object):
         """Save the Catalog object as an HDF5 file.
 
         Arguments:
-            filepath: String specifying the path to save the data.
+            filepath: A string or pathlib.Path object specifying the
+                path to save the catalog object.
 
         """
         # Convert stimuli filepaths to strings for saving.
@@ -289,46 +180,29 @@ class Catalog(object):
         path_array = np.asarray(
             path_str, dtype="S{0}".format(max_filepath_length)
         )
+        common_path = os.fspath(self.common_path)
 
         f = h5py.File(filepath, "w")
+        f.create_dataset("stimulus_filepath", data=path_array)
+        f.create_dataset("common_path", data=common_path)
         f.create_dataset("stimulus_id", data=self.stimulus_id)
-        f.create_dataset(
-            "stimulus_filepath",
-            data=path_array
-        )
-        f.create_dataset("class_id", data=self.class_id)
-
-        # Handle class ID to label mapping.
-        max_label_length = len(max(self.class_label.values(), key=len))
-        n_class = len(self.class_label)
-        class_map_class_id = np.empty(n_class, dtype=np.int)
-        class_map_label = np.empty(n_class, dtype="S{0}".format(
-            max_label_length
-        ))
-        idx = 0
-        for key, value in self.class_label.items():
-            class_map_class_id[idx] = key
-            class_map_label[idx] = value
-            idx = idx + 1
-
-        f.create_dataset(
-            "class_map_class_id",
-            data=class_map_class_id
-        )
-        f.create_dataset(
-            "class_map_label",
-            data=class_map_label
-        )
-
         f.close()
 
-    def subset(self, idx, squeeze=False):
-        """Return a subset of catalog with new stimulus IDs."""
-        catalog = copy.deepcopy(self)
-        catalog.stimuli = catalog.stimuli.iloc[idx]
-        catalog.n_stimuli = len(catalog.stimuli)
-        if squeeze:
-            catalog.stimuli.at[:, "id"] = np.arange(0, catalog.n_stimuli)
+    def subset(self, idx_array):
+        """Return a subset of catalog."""
+        if idx_array.dtype == 'bool':
+            dmy_idx = np.arange(len(idx_array))
+            idx_array = dmy_idx[idx_array]
+
+        filepath = []
+        for idx in idx_array:
+            filepath.append(self.filepath[idx])
+
+        catalog = Catalog(
+            filepath,
+            common_path=self.common_path,
+            stimulus_id=self.stimulus_id[idx_array],
+        )
         return catalog
 
     def convert_filenames(self, filepath_list_in):
@@ -351,28 +225,6 @@ class Catalog(object):
                     break
         return catalog_idx_list
 
-    def convert_labels(self, label_list_in):
-        """Convert class labels to corresponding class IDs.
-
-        Returns -1 for any class labels that are not found.
-
-        Arguments:
-            label_list_in: A list of labels.
-
-        Returns:
-            class_id_list: A NumPy array of indices.
-
-        """
-        class_id_list = -1 * np.ones(len(label_list_in), dtype=int)
-        for idx_in, label_in in enumerate(label_list_in):
-            was_found = False
-            for class_id_cat, label_cat in self.class_label.items():
-                if label_in == label_cat:
-                    class_id_list[idx_in] = class_id_cat
-                    was_found = True
-                    break
-        return class_id_list
-
 
 def load_catalog(filepath, verbose=0):
     """Load catalog saved via the save method.
@@ -388,122 +240,16 @@ def load_catalog(filepath, verbose=0):
 
     """
     f = h5py.File(filepath, "r")
-    stimulus_id = f["stimulus_id"][()]
     stimulus_filepath = f["stimulus_filepath"][()].astype('U')
-    class_id = f["class_id"][()]
-
-    class_map_class_id = f["class_map_class_id"][()]
-    class_map_label = f["class_map_label"][()]
-    class_label_dict = {}
-    for idx in np.arange(len(class_map_class_id)):
-        class_label_dict[class_map_class_id[idx]] = (
-            class_map_label[idx].decode('ascii')
-        )
-
+    common_path = f["common_path"][()]
+    stimulus_id = f["stimulus_id"][()]
     catalog = Catalog(
-        stimulus_id, stimulus_filepath, class_id, class_label_dict)
+        stimulus_filepath, stimulus_id=stimulus_id, common_path=common_path
+    )
     f.close()
 
     if verbose > 0:
         print("Catalog Summary")
         print('  n_stimuli: {0}'.format(catalog.n_stimuli))
-        # print('  n_task: {0}'.format())  TODO
         print('')
     return catalog
-
-
-def shepard_hovland_jenkins_1961_catalog():
-    """Generate catalog with six category types from 1961 paper.
-
-    Type I
-    Type II
-    Type III
-    Type IV
-    Type V
-    Type VI
-
-    References:
-        [1] Shephard, R. N., Hovland, C. I., & Jenkins, H. M. (1961).
-            Learning and Memorization of Classifications. Psychological
-            Monographs: General and Applied, 75(13), 1-42.
-            https://doi.org/10.1037/h0093825
-
-    """
-    stimulus_id = np.array([0, 1, 2, 3, 4, 5, 6, 7])
-    filepath = [
-        '0.jpg', '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6jpg', '7.jpg'
-    ]
-    task_label = ['I', 'II', 'III', 'IV', 'V', 'VI']
-    class_id = np.array([
-        [0, 0, 0, 0, 1, 1, 1, 1],
-        [0, 0, 1, 1, 1, 1, 0, 0],
-        [0, 0, 0, 1, 1, 0, 1, 1],
-        [0, 0, 0, 1, 0, 1, 1, 1],
-        [0, 0, 0, 1, 1, 1, 1, 0],
-        [0, 1, 1, 0, 1, 0, 0, 1]
-    ])
-    class_id = np.transpose(class_id)
-    catalog = Catalog(
-        stimulus_id, filepath, class_id=class_id, task_label=task_label
-    )
-
-    feature_matrix = np.array([
-        [0, 0, 0],
-        [0, 0, 1],
-        [0, 1, 0],
-        [0, 1, 1],
-        [1, 0, 0],
-        [1, 0, 1],
-        [1, 1, 0],
-        [1, 1, 1],
-    ])
-
-    return catalog, feature_matrix
-
-
-def rules_exceptions_catalog():
-    """Return a rules and exception category structure.
-
-    See [1].
-
-    References:
-        [1] Kruschke, J. K. (1992). ALCOVE: an exemplar-based
-            connectionist model of category learning. Psychological
-            Review, 99(1), 22-44.
-            http://dx.doi.org/10.1037/0033-295X.99.1.22.
-
-    """
-    n_stimuli = 14
-    stimulus_id = np.arange(n_stimuli)
-    filepath = [
-        '0.jpg', '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6jpg',
-        '7.jpg', '8.jpg', '9.jpg', '10.jpg', '11.jpg', '12.jpg', '13.jpg'
-    ]
-    class_id = np.array([
-        [0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1]
-    ])
-    class_id = np.transpose(class_id)
-    catalog = Catalog(stimulus_id, filepath, class_id=class_id)
-
-    feature_matrix = np.array([
-        [1, 1],
-        [2, 1],
-        [3, 1],
-        [1, 3],
-        [2, 3],
-        [3, 3],
-        [1, 4.4],
-        [3, 4.6],
-        [1, 6],
-        [2, 6],
-        [3, 6],
-        [1, 8],
-        [2, 8],
-        [3, 8],
-    ])
-
-    stimulus_label = np.array([
-        'A_1', 'A_2', 'A_3', 'A_4', 'A_5', 'A_6', 'B_e',
-        'A_e', 'B_6', 'B_5', 'B_4', 'B_3', 'B_2', 'B_1',
-    ])
-    return catalog, feature_matrix, stimulus_label
