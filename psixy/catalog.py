@@ -24,6 +24,12 @@ Functions:
     load_catalog: Load a hdf5 file as a psixy.models.Catalog
         object.
 
+TODO:
+    * MAYBE allow user to specify label to access relevant data
+    * MAYBE move `class_list` inside catalog?
+    * MAYBE allow class_id's to be whatever the user wants, then
+        class_labels is just a flat mapping
+
 
 """
 
@@ -67,7 +73,8 @@ class Catalog(object):
     """
 
     def __init__(
-            self, stimulus_id, filepath, class_id=None, class_label=None):
+            self, stimulus_id, filepath, class_id=None, class_label=None,
+            task_label=None):
         """Initialize.
 
         Arguments:
@@ -79,6 +86,9 @@ class Catalog(object):
                 shape=(n_stimuli, n_task)
             class_label (optional): A dictionary mapping between each
                 (integer) class_id and a (string) label.
+            task_label (optional): A list of string labels for each
+                task. This length of the list must equal the number
+                of tasks.
 
         """
         # Set stimulus ID.
@@ -98,7 +108,8 @@ class Catalog(object):
         self.class_id = class_id
         self.n_task = class_id.shape[1]
 
-        # Set class label mapping. TODO
+        # Set class label mapping.
+        # TODO how should this work for cases with more than one task?
         if class_label is None:
             # Make the label the ID.
             class_label = {}
@@ -108,6 +119,9 @@ class Catalog(object):
         else:
             class_label = self._check_class_label(class_label)
         self.class_label = class_label
+
+        self.task_label = self._check_task_label(task_label)
+
         self.version = '0.1.0'
 
     def _check_stimulus_id(self, stimulus_id):
@@ -208,6 +222,32 @@ class Catalog(object):
                     "class_id={0}.".format(class_id)
                 ))
         return class_label
+
+    def _check_task_label(self, task_label):
+        """Check `task_label` argument.
+
+        Returns:
+            task_label
+
+        Raises:
+            ValueError
+
+        """
+        # TODO handle defaults.
+        if task_label is None:
+            task_label = np.arange(self.n_task)
+            task_label = task_label.astype(str)
+            # TODO test
+        else:
+            n_provided = len(task_label)
+            if n_provided != self.n_task:
+                raise ValueError((
+                    "The argument `task_label` must contain a label for all "
+                    "tasks. You have only provided {0} labels but need to "
+                    "provide {1} labels.".format(n_provided, self.n_task)
+                ))
+            # TODO test valid and invalid
+        return task_label
 
     @property
     def common_path(self):
@@ -367,3 +407,100 @@ def load_catalog(filepath, verbose=0):
         # print('  n_task: {0}'.format())  TODO
         print('')
     return catalog
+
+
+def shepard_hovland_jenkins_1961_catalog():
+    """Generate catalog with six category types from 1961 paper.
+
+    Type I
+    Type II
+    Type III
+    Type IV
+    Type V
+    Type VI
+
+    References:
+        [1] Shephard, R. N., Hovland, C. I., & Jenkins, H. M. (1961).
+            Learning and Memorization of Classifications. Psychological
+            Monographs: General and Applied, 75(13), 1-42.
+            https://doi.org/10.1037/h0093825
+
+    """
+    stimulus_id = np.array([0, 1, 2, 3, 4, 5, 6, 7])
+    filepath = [
+        '0.jpg', '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6jpg', '7.jpg'
+    ]
+    task_label = ['I', 'II', 'III', 'IV', 'V', 'VI']
+    class_id = np.array([
+        [0, 0, 0, 0, 1, 1, 1, 1],
+        [0, 0, 1, 1, 1, 1, 0, 0],
+        [0, 0, 0, 1, 1, 0, 1, 1],
+        [0, 0, 0, 1, 0, 1, 1, 1],
+        [0, 0, 0, 1, 1, 1, 1, 0],
+        [0, 1, 1, 0, 1, 0, 0, 1]
+    ])
+    class_id = np.transpose(class_id)
+    catalog = Catalog(
+        stimulus_id, filepath, class_id=class_id, task_label=task_label
+    )
+
+    feature_matrix = np.array([
+        [0, 0, 0],
+        [0, 0, 1],
+        [0, 1, 0],
+        [0, 1, 1],
+        [1, 0, 0],
+        [1, 0, 1],
+        [1, 1, 0],
+        [1, 1, 1],
+    ])
+
+    return catalog, feature_matrix
+
+
+def rules_exceptions_catalog():
+    """Return a rules and exception category structure.
+
+    See [1].
+
+    References:
+        [1] Kruschke, J. K. (1992). ALCOVE: an exemplar-based
+            connectionist model of category learning. Psychological
+            Review, 99(1), 22-44.
+            http://dx.doi.org/10.1037/0033-295X.99.1.22.
+
+    """
+    n_stimuli = 14
+    stimulus_id = np.arange(n_stimuli)
+    filepath = [
+        '0.jpg', '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6jpg',
+        '7.jpg', '8.jpg', '9.jpg', '10.jpg', '11.jpg', '12.jpg', '13.jpg'
+    ]
+    class_id = np.array([
+        [0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1]
+    ])
+    class_id = np.transpose(class_id)
+    catalog = Catalog(stimulus_id, filepath, class_id=class_id)
+
+    feature_matrix = np.array([
+        [1, 1],
+        [2, 1],
+        [3, 1],
+        [1, 3],
+        [2, 3],
+        [3, 3],
+        [1, 4.4],
+        [3, 4.6],
+        [1, 6],
+        [2, 6],
+        [3, 6],
+        [1, 8],
+        [2, 8],
+        [3, 8],
+    ])
+
+    stimulus_label = np.array([
+        'A_1', 'A_2', 'A_3', 'A_4', 'A_5', 'A_6', 'B_e',
+        'A_e', 'B_6', 'B_5', 'B_4', 'B_3', 'B_2', 'B_1',
+    ])
+    return catalog, feature_matrix, stimulus_label
