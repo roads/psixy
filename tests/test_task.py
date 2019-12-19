@@ -14,11 +14,7 @@
 # limitations under the License.
 # ==============================================================================
 
-"""Module for testing `task.py`.
-
-TODO:
-
-"""
+"""Module for testing `task.py`."""
 
 from pathlib import Path
 import pytest
@@ -26,6 +22,7 @@ import numpy as np
 
 import psixy.catalog
 import psixy.task
+
 
 @pytest.fixture(scope="module")
 def simple_catalog():
@@ -106,7 +103,7 @@ class TestTask:
                 simple_catalog, class_id, class_label=class_label
             )
 
-        # Test when provided labels don't matc.
+        # Test when provided labels don't match.
         class_label = {0: 'Alpha', 2: 'Delta', 6: 'Charlie'}
         with pytest.raises(Exception) as e_info:
             task = psixy.task.Task(

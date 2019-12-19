@@ -23,8 +23,10 @@ Functions:
     load_task: Load a hdf5 file as a psixy.models.Task object.
 
 TODO:
-    * implement save?
-    * implement load_task?
+    * `map` method
+    * `convert` method
+    * implement save
+    * implement load_task
 
 """
 
@@ -46,6 +48,11 @@ class Task(object):
         name: A (string) name for the task.
 
     Methods:
+        map: A helper function that maps an ND NumPy array representing
+            stimulus_id's to a corresponding ND NumPy array of
+            class_id's.
+        convert: A helper function that takes class_label's
+            (class_id's) and converts to class_id's (class_label's).
         save: Save the Task object to disk.
 
     """
@@ -171,7 +178,7 @@ def shepard_hovland_jenkins_1961():
     Type VI
 
     References:
-        [1] Shephard, R. N., Hovland, C. I., & Jenkins, H. M. (1961).
+        [1] Shepard, R. N., Hovland, C. I., & Jenkins, H. M. (1961).
             Learning and Memorization of Classifications. Psychological
             Monographs: General and Applied, 75(13), 1-42.
             https://doi.org/10.1037/h0093825
