@@ -27,8 +27,22 @@ slowly. In Figure 5B, the attention-learning rate was raised to
 lambda_a = 0.0033, and consequently Type II was learned second fastest,
 as observed in human data.
 
-Figure 14 Description:
-TODO
+Figure 14 Description (pg. 37-38):
+It is now shown that ALCOVE can exhibit three-stage learning of high-
+frequency exceptions to rules in a highly simplified abstract analogue
+of the verb-acquisition situation. For this demonstration, the input
+stimuli are distributed over two continuously varying dimensions as
+shown in Figure 13.
+...
+ALCOVE was applied to the structure in Figure 13, using 14 hidden nodes
+and parameter values near the values used to fit the Medin et al.
+(1982) data: phi = 1.00, lambda_w = 0.025, c = 3.50, and
+lambda_a = 0.010. Epoch updating was used, with each rule exemplar
+occurring once per epoch and each exceptional case occurring four times
+per epoch, for a total of 20 patterns per epoch. (The same qualitative
+effects are produced with trial-by-trial updating, with superimposed
+trial-by-trial "sawteeth," what Plunket and Marchman, 1991, called
+micro U-shaped learning.) The results are shown in Figure 14.
 
 References:
     [1] Kruschke, J. K. (1992). ALCOVE: an exemplar-based connectionist
@@ -45,6 +59,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 
 import psixy.catalog
+import psixy.task
 import psixy.models
 import psixy.sequence
 
@@ -55,7 +70,7 @@ def main():
     fp_fig_5 = Path('examples', 'kruschke_1992_fig_5.pdf')
     fp_fig_14 = Path('examples', 'kruschke_1992_fig_14.pdf')
 
-    create_figure_5(fp_fig_5)
+    # create_figure_5(fp_fig_5)
     create_figure_14(fp_fig_14)
 
 
@@ -64,7 +79,8 @@ def create_figure_5(fp_fig_5):
     n_sequence = 10
     n_epoch = 50
 
-    catalog, feature_matrix = psixy.catalog.shepard_hovland_jenkins_1961_catalog()
+    task_list, feature_matrix = psixy.task.shepard_hovland_jenkins_1961()
+    n_task = len(task_list)
     class_list = np.array([0, 1], dtype=int)
 
     # Model without attention.
@@ -85,11 +101,12 @@ def create_figure_5(fp_fig_5):
     model_attn.params['lambda_w'] = 0.03
     model_attn.params['lambda_a'] = 0.0033
 
-    accuracy_epoch_0 = np.zeros([catalog.n_task, n_epoch])
-    accuracy_epoch_attn = np.zeros([catalog.n_task, n_epoch])
-    for i_task in range(catalog.n_task):
+    accuracy_epoch_0 = np.zeros([n_task, n_epoch])
+    accuracy_epoch_attn = np.zeros([n_task, n_epoch])
+    for i_task in range(n_task):
+        curr_task = task_list[i_task]
         stimulus_sequence = generate_fig5_stimulus_sequences(
-            catalog.task(task_idx=i_task)['class_id'], feature_matrix,
+            curr_task.class_id, feature_matrix,
             n_sequence, n_epoch
         )
 
@@ -97,20 +114,20 @@ def create_figure_5(fp_fig_5):
             stimulus_sequence, mode='correct'
         )
         accuracy_epoch_attn[i_task, :] = epoch_analysis_correct(
-            prob_correct_attn, catalog.n_stimuli
+            prob_correct_attn, curr_task.n_stimuli
         )
 
         prob_correct_0 = model_0.predict(stimulus_sequence, mode='correct')
         accuracy_epoch_0[i_task, :] = epoch_analysis_correct(
-            prob_correct_0, catalog.n_stimuli
+            prob_correct_0, curr_task.n_stimuli
         )
 
     # Plot figure.
     # Create color map of green and red shades, but don't use middle
     # yellow.
     cmap = matplotlib.cm.get_cmap('RdYlGn')
-    norm = matplotlib.colors.Normalize(vmin=0., vmax=catalog.n_task + 2)
-    color_array = cmap(norm(np.flip(range(catalog.n_task + 2))))
+    norm = matplotlib.colors.Normalize(vmin=0., vmax=n_task + 2)
+    color_array = cmap(norm(np.flip(range(n_task + 2))))
     # Drop middle yellow colors.
     locs = np.array([1, 1, 1, 0, 0, 1, 1, 1], dtype=bool)
     color_array = color_array[locs, :]
@@ -118,12 +135,13 @@ def create_figure_5(fp_fig_5):
     fig, ax = plt.subplots(figsize=(8, 4))
 
     ax = plt.subplot(1, 2, 1)
-    for i_task in range(catalog.n_task):
+    for i_task in range(n_task):
+        curr_task = task_list[i_task]
         ax.plot(
             accuracy_epoch_0[i_task, :],
             marker='o', markersize=3,
             c=color_array[i_task, :],
-            label='{0}'.format(catalog.task_label[i_task])
+            label='{0}'.format(curr_task.name)
         )
     ax.set_xlabel('epoch')
     ax.set_ylabel('Pr(correct)')
@@ -131,12 +149,12 @@ def create_figure_5(fp_fig_5):
     ax.legend(title='Category Type')
 
     ax = plt.subplot(1, 2, 2)
-    for i_task in range(catalog.n_task):
+    for i_task in range(n_task):
         ax.plot(
             accuracy_epoch_attn[i_task, :],
             marker='o', markersize=3,
             c=color_array[i_task, :],
-            label='{0}'.format(catalog.task_label[i_task])
+            label='{0}'.format(curr_task.name)
         )
     ax.set_xlabel('epoch')
     ax.set_ylabel('Pr(correct)')
@@ -155,7 +173,7 @@ def create_figure_14(fp_fig_14):
     n_epoch = 50
     n_stimuli_per_epoch = 20
 
-    catalog, feature_matrix, stimulus_label = psixy.catalog.rules_exceptions_catalog()
+    task, feature_matrix, stimulus_label = psixy.task.kruschke_rules_and_exceptions()
     class_list = np.array([0, 1], dtype=int)
 
     # Model without attention.
@@ -168,12 +186,12 @@ def create_figure_14(fp_fig_14):
     model_attn.params['lambda_a'] = 0.010
 
     stimulus_sequence = generate_fig_14_stimulus_sequences(
-        catalog.task()['class_id'], feature_matrix, n_sequence, n_epoch
+        task.class_id, feature_matrix, n_sequence, n_epoch
     )
 
     prob_correct_attn = model_attn.predict(stimulus_sequence, mode='correct')
     accuracy_epoch_attn = epoch_analysis_stimulus(
-        stimulus_sequence, prob_correct_attn, catalog.stimulus_id,
+        stimulus_sequence, prob_correct_attn, task.stimulus_id,
         n_stimuli_per_epoch
     )
 
@@ -194,7 +212,7 @@ def create_figure_14(fp_fig_14):
     fig, ax = plt.subplots(figsize=(4, 4))
 
     ax = plt.subplot(1, 1, 1)
-    for i_stim in range(catalog.n_stimuli):
+    for i_stim in range(task.n_stimuli):
         ax.plot(
             accuracy_epoch_attn[i_stim, :],
             marker=marker_list[i_stim], markersize=3,
