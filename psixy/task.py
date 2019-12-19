@@ -23,12 +23,14 @@ Functions:
     load_task: Load a hdf5 file as a psixy.models.Task object.
 
 TODO:
-    * implement save
-    * implement load_task
+    * implement save?
+    * implement load_task?
 
 """
 
 import numpy as np
+
+import psixy.catalog
 
 
 class Task(object):
@@ -158,8 +160,8 @@ class Task(object):
         return name
 
 
-def shepard_hovland_jenkins_1961_catalog():
-    """Generate catalog with six category types from 1961 paper.
+def shepard_hovland_jenkins_1961():
+    """Generate task list with six category types from 1961 paper.
 
     Type I
     Type II
@@ -175,11 +177,13 @@ def shepard_hovland_jenkins_1961_catalog():
             https://doi.org/10.1037/h0093825
 
     """
-    stimulus_id = np.array([0, 1, 2, 3, 4, 5, 6, 7])
     filepath = [
-        '0.jpg', '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6jpg', '7.jpg'
+        '0.jpg', '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6.jpg', '7.jpg'
     ]
-    task_label = ['I', 'II', 'III', 'IV', 'V', 'VI']
+    stimulus_id = np.array([0, 1, 2, 3, 4, 5, 6, 7])
+    catalog = psixy.catalog.Catalog(filepath, stimulus_id=stimulus_id)
+
+    name_list = ['I', 'II', 'III', 'IV', 'V', 'VI']
     class_id = np.array([
         [0, 0, 0, 0, 1, 1, 1, 1],
         [0, 0, 1, 1, 1, 1, 0, 0],
@@ -188,10 +192,11 @@ def shepard_hovland_jenkins_1961_catalog():
         [0, 0, 0, 1, 1, 1, 1, 0],
         [0, 1, 1, 0, 1, 0, 0, 1]
     ])
-    class_id = np.transpose(class_id)
-    catalog = Catalog(
-        stimulus_id, filepath, class_id=class_id, task_label=task_label
-    )
+    task_list = []
+    for idx, name in enumerate(name_list):
+        task_list.append(
+            Task(catalog, class_id[idx], name=name)
+        )
 
     feature_matrix = np.array([
         [0, 0, 0],
@@ -204,10 +209,10 @@ def shepard_hovland_jenkins_1961_catalog():
         [1, 1, 1],
     ])
 
-    return catalog, feature_matrix
+    return task_list, feature_matrix
 
 
-def rules_exceptions_catalog():
+def kruschke_rules_and_exceptions():
     """Return a rules and exception category structure.
 
     See [1].
@@ -219,17 +224,15 @@ def rules_exceptions_catalog():
             http://dx.doi.org/10.1037/0033-295X.99.1.22.
 
     """
-    n_stimuli = 14
-    stimulus_id = np.arange(n_stimuli)
     filepath = [
         '0.jpg', '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6jpg',
         '7.jpg', '8.jpg', '9.jpg', '10.jpg', '11.jpg', '12.jpg', '13.jpg'
     ]
-    class_id = np.array([
-        [0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1]
-    ])
-    class_id = np.transpose(class_id)
-    catalog = Catalog(stimulus_id, filepath, class_id=class_id)
+    stimulus_id = np.arange(len(filepath))
+    catalog = psixy.catalog.Catalog(filepath, stimulus_id=stimulus_id)
+
+    class_id = np.array([0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1])
+    task = Task(catalog, class_id)
 
     feature_matrix = np.array([
         [1, 1],
@@ -252,4 +255,4 @@ def rules_exceptions_catalog():
         'A_1', 'A_2', 'A_3', 'A_4', 'A_5', 'A_6', 'B_e',
         'A_e', 'B_6', 'B_5', 'B_4', 'B_3', 'B_2', 'B_1',
     ])
-    return catalog, feature_matrix, stimulus_label
+    return task, feature_matrix, stimulus_label
