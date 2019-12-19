@@ -25,7 +25,6 @@ Classes:
 Functions:
     load_model: Load a hdf5 file, that was saved with the `save`
         class method, as a psixy.models.CategoryLearningModel object.
-    project_attention: Function for projecting attention.
 
 Notes:
     State not initialized on creation of model object. Rather state
@@ -40,10 +39,10 @@ Todo:
     * different optimizers
     * loss term and humble teacher
     * WeightedMinkowski what should weight default be?
-    * Use lazy weight initialization that doesn't require n_sequence 
+    * Use lazy weight initialization that doesn't require n_sequence
         on initialization.
     * Makes sure gradients are being computed correctly.
-    * self.n_class => self.n_output
+    * MAYBE self.n_class => self.n_output
 
 """
 
@@ -66,7 +65,69 @@ from tensorflow.keras.constraints import Constraint
 
 import psixy.utils
 
-# tf.keras.backend.set_floatx('float64')
+tf.keras.backend.set_floatx('float32')
+
+
+class Encoder(object):
+    """Abstract base class for perceptual encoding component.
+
+    An encoder maps a stimulus ID to a multidimensional feature
+    representation.
+
+    Methods:
+        encode: Encode stimulus IDs as multidimensional feature
+            representation.
+
+    """
+
+    __metaclass__ = ABCMeta
+
+    def __init__(self):
+        """Initialize."""
+        super().__init__()
+
+    @abstractmethod
+    def encode(self, stimulus_id):
+        """Encode stimulus IDs as feature representation."""
+        pass
+
+
+class Deterministic(Encoder):
+    """A deterministic encoder."""
+
+    def __init__(self, stimulus_id, z):
+        """Initialize.
+
+        Arguments:
+            d: A dictionary of the mapping.
+
+        """
+        # TODO checks and tests
+        self.stimulus_id = stimulus_id
+        self.z = z
+
+    def encode(self, stimulus_id):
+        """Encode stimulus IDs as feature representation.
+
+        Arguments:
+            stimulus_id: An ND NumPy array containing stimulus IDs.
+
+        Returns:
+            z: The corresponding stimulus representation.
+                shape=(n_sequence, n_trial, n_dim)
+                TODO allow for arbitrary shape where last dim is n_dim
+
+        """
+        # First convert stimulus_id to stimulus_idx.
+        stimulus_idx = np.zeros(stimulus_id.shape, dtype=int)
+        for idx, id in enumerate(self.stimulus_id):
+            locs = np.equal(stimulus_id, id)
+            stimulus_idx[locs] = idx
+
+        # Now grab representations.
+        z = self.z[stimulus_idx, :]
+
+        return z
 
 
 class CategoryLearningModel(object):
@@ -82,6 +143,11 @@ class CategoryLearningModel(object):
     """
 
     __metaclass__ = ABCMeta
+
+    # TODO
+    # def __init__(self):
+    #     """Initialize."""
+    #     super().__init__()
 
     @abstractmethod
     def fit(self, stimulus_seq, behavior_seq, options=None, verbose=0):
@@ -102,6 +168,11 @@ class CategoryLearningModel(object):
 
 class ALCOVE(CategoryLearningModel):
     """ALCOVE category learning model (Kruschke, 1992).
+
+    The model is implemented using TensorFlow, so that gradients for
+    state updates can be computed for arbitrary parameter settings.
+    The original model presented in [1] assumed that rho=1, tau=1, and
+    gamma=0.
 
     Attributes:
         params: Dictionary for the model's free parameters.
@@ -124,7 +195,7 @@ class ALCOVE(CategoryLearningModel):
 
     This model can be used to instantiate either a 'training exemplar'
     or 'covering map' variant of ALCOVE. Just pass in the locations of
-    the the hidden nodes.
+    the the hidden nodes at initialization.
 
     Training exemplar variant:
     "In the simplest version of ALCOVE, there is a hidden node placed
@@ -135,12 +206,6 @@ class ALCOVE(CategoryLearningModel):
     article, hidden nodes ares scattered randomly across the space,
     forming a covering map of the input space (pg. 23)."
 
-    Notes:
-        The model is implemented using TensorFlow, so that gradients
-        for state updates can be computed for arbitrary parameter
-        settings. The original model presented in [1] assumed that
-        rho=1, tau=1, and gamma=0.
-
     References:
     [1] Kruschke, J. K. (1992). ALCOVE: an exemplar-based connectionist
         model of category learning. Psychological review, 99(1), 22-44.
@@ -148,7 +213,7 @@ class ALCOVE(CategoryLearningModel):
 
     """
 
-    def __init__(self, z, class_id, verbose=0):
+    def __init__(self, z, class_id, encoder, verbose=0):
         """Initialize.
 
         Arguments:
@@ -159,11 +224,12 @@ class ALCOVE(CategoryLearningModel):
                 dimension.
             class_id: A list of class ID's. The order of this list
                 determines the output order of the model.
+            encoder: TODO
             verbose (optional): Verbosity of output.
 
         """
-        # Model constants.
-        self.name = "ALCOVE"
+        self.encoder = encoder
+
         # At initialization, ALCOVE must know the locations of the RBFs and
         # the unique classes.
         self.z = z.astype(dtype=K.floatx())
@@ -171,6 +237,7 @@ class ALCOVE(CategoryLearningModel):
         self.n_dim = z.shape[1]
         self.output_class_id = self._check_class_id(class_id)
         self.n_class = self.output_class_id.shape[0]
+
         # Map IDs.
         self.class_map = {}
         for i_class in range(self.n_class):
@@ -232,8 +299,6 @@ class ALCOVE(CategoryLearningModel):
                 the fitted model.
 
         """
-        # TODO implement working fit method.
-
         # Settings.
         max_epoch = 10
         batch_size = stimulus_sequence.n_sequence  # TODO
@@ -243,106 +308,53 @@ class ALCOVE(CategoryLearningModel):
         inputs = self._prepare_inputs(stimulus_sequence)
         targets = self._prepare_targets(behavior_sequence)
         seq_dataset = tf.data.Dataset.from_tensor_slices((inputs, targets))
-        dataset = seq_dataset.shuffle(buffer_size).batch(batch_size, drop_remainder=True)
+        dataset = seq_dataset.shuffle(buffer_size).batch(
+            batch_size, drop_remainder=True
+        )
 
         theta = self._get_theta(self.params)  # TODO
         model, rnn, initial_states = self._build_tf_model(
             theta, stimulus_sequence.n_trial, batch_size
         )
-        model_parameters = list(theta.values())
-        model_parameters = model_parameters[4:]  # TODO
+        model_parameters = list(theta.values())  # TODO DELETE?
 
-        optimizer = tf.keras.optimizers.Adam()
+        loss_train = self.evaluate(stimulus_sequence, behavior_sequence)
+        beat_initialization = False
 
-        # @tf.function
-        def fix_gradient(grads):
-            for idx,  grad in enumerate(grads):
-                grads[idx] = tf.where(tf.math.is_nan(grad), tf.zeros_like(grad), grad)
-            return grads
+        if verbose > 0:
+            print('Starting configuration:')
+            print('  loss: {0:.2f}'.format(loss_train))
+            print('')
 
-        # @tf.function
-        def train_step(input_batch, target_batch):
-            with tf.GradientTape(watch_accessed_variables=False) as model_tape:
-                model_tape.watch(model_parameters)
-                logit_response_batch = model(input_batch)
-                loss = tf.keras.losses.categorical_crossentropy(
-                    target_batch, logit_response_batch, from_logits=True
-                )
-                # prob_response = tf.math.softmax(logit_response_batch, axis=2)
-                # prob_response_correct = prob_response * target_batch
-                # prob_response_correct = tf.reduce_sum(prob_response_correct, axis=2)
-                # loss = prob_response_correct
-                # loss = tf.reduce_sum(tf.math.log(prob_response_correct))
-                # loss = tf.reduce_mean(loss, axis=1)
-                # loss = tf.reduce_mean(loss, axis=0)
-                loss = tf.reduce_mean(loss)
-            parameter_gradients = model_tape.gradient(loss, model_parameters)
-            for idx, grad in enumerate(parameter_gradients):
-                if grad is not None:
-                    print(
-                        '    {0}: {1:.6f} {2:.6g}'.format(
-                            model_parameters[idx].name,
-                            model_parameters[idx].numpy(), grad.numpy()
-                        )
-                    )
-            parameter_gradients = fix_gradient(parameter_gradients)
-            optimizer.apply_gradients(
-                zip(parameter_gradients, model_parameters)
+        for i_restart in range(options['n_restart']):
+            # Random initialization of variables (with bounds and trainable settings appropriately set).  TODO
+
+            # Perform optimization restart.
+            curr_loss_train, curr_params = self._fit_restart(
+                dataset, model, rnn, initial_states
             )
-            return loss
 
-        loss_train = np.inf
-        for i_epoch in range(max_epoch):
-            start = time.time()
-            for (i_batch, (input_batch, target_batch)) in enumerate(dataset):
-                # Initialize the hidden state at the start of every batch
-                # since using stateful model.
-                rnn.reset_states(states=initial_states)
-                loss = train_step(input_batch, target_batch)
+            if verbose > 1:
+                print('Restart {0}'.format(i_restart))
+                print('  loss: {0:.2f} | iterations: {1}'.format(res.fun, res.nit))
+                print('  exit mode: {0} | {1}'.format(res.status, res.message))
+                print('')
 
-                # if i_batch % 100 == 0:
-                template = 'Epoch {} Batch {} Loss {:.4f}'
-                print(template.format(i_epoch + 1, i_batch, loss))
+            if curr_loss_train < loss_train:
+                beat_initialization = True
+                params_opt = curr_params
+                loss_train = curr_loss_train
 
-            # print('Epoch {} Loss {:.4f}'.format(i_epoch + 1, loss))
-            # print('Time taken for 1 epoch {:.2f} sec\n'.format(time.time() - start))
-
-        # ===================================================================
-
-        # loss_train = self.evaluate(stimulus_sequence, behavior_sequence)
-        # beat_initialization = False
-
-        # if verbose > 0:
-        #     print('Starting configuration:')
-        #     print('  loss: {0:.2f}'.format(loss_train))
-        #     print('')
-
-        # for i_restart in range(options['n_restart']):
-        #     # Random initialization of variables (with bounds and trainable settings appropriately set).  TODO
-
-        #     # Perform gradient descent.
-
-        #     if verbose > 1:
-        #         print('Restart {0}'.format(i_restart))
-        #         print('  loss: {0:.2f} | iterations: {1}'.format(res.fun, res.nit))
-        #         print('  exit mode: {0} | {1}'.format(res.status, res.message))
-        #         print('')
-
-        #     if res.fun < loss_train:
-        #         beat_initialization = True
-        #         params_opt = res.x
-        #         loss_train = res.fun
-
-        # # Set free parameters using best run.
-        # if beat_initialization:
+        # Set free parameters using best run. TODO
+        if beat_initialization:
         #     self._set_params(params_opt)
-        #     if verbose > 0:
-        #         print('Final')
-        #         print('  loss: {0:.2f}'.format(loss_train))
-        # else:
-        #     if verbose > 0:
-        #         print('Final')
-        #         print('  Did not beat starting configuration.')
+            if verbose > 0:
+                print('Final')
+                print('  loss: {0:.2f}'.format(loss_train))
+        else:
+            if verbose > 0:
+                print('Final')
+                print('  Did not beat starting configuration.')
 
         return loss_train
 
@@ -378,7 +390,7 @@ class ALCOVE(CategoryLearningModel):
 
         """
         # Settings
-        batch_size = stimulus_sequence.n_sequence  # TODO handle smaller batches
+        batch_size = stimulus_sequence.n_sequence  # TODO Handle other sizes.
         buffer_size = 10000
 
         # Prepare dataset.
@@ -406,7 +418,9 @@ class ALCOVE(CategoryLearningModel):
                 stimuli_labels, self.n_class, axis=2
             )
             prob_response_correct = prob_response * stimuli_labels_one_hot
-            prob_response_correct = tf.reduce_sum(prob_response_correct, axis=2)
+            prob_response_correct = tf.reduce_sum(
+                prob_response_correct, axis=2
+            )
             res = prob_response_correct
         elif mode == 'all':
             res = prob_response
@@ -415,6 +429,33 @@ class ALCOVE(CategoryLearningModel):
                 'Undefined option {0} for mode argument.'.format(str(mode))
             )
         return res.numpy()
+
+    def _fit_restart(self, dataset, model, rnn, initial_states):
+        """Fit restart."""
+        def objective_func(dataset, rnn):
+            for (i_batch, (input_batch, target_batch)) in enumerate(dataset):
+                rnn.reset_states(states=initial_states)
+                logit_response_batch = model(input_batch)
+                loss = tf.keras.losses.categorical_crossentropy(
+                    target_batch, logit_response_batch, from_logits=True
+                )
+                # prob_response = tf.math.softmax(logit_response_batch, axis=2)
+                # prob_response_correct = prob_response * target_batch
+                # prob_response_correct = tf.reduce_sum(
+                #     prob_response_correct, axis=2
+                # )
+                # loss = prob_response_correct
+                # loss = tf.reduce_sum(tf.math.log(prob_response_correct))
+                # loss = tf.reduce_mean(loss, axis=1)
+                # loss = tf.reduce_mean(loss, axis=0)
+                loss = tf.reduce_mean(loss)
+            return loss  # TODO average over batches
+
+        # TODO
+
+        loss_train = res.fun
+        params = res.x
+        return loss_train, params
 
     def _check_class_id(self, class_id):
         """Check `class_id` argument."""
@@ -452,8 +493,9 @@ class ALCOVE(CategoryLearningModel):
 
     def _prepare_inputs(self, stimulus_sequence):
         """Prepare inputs for TensorFlow model."""
+        stimulus_z = self.encoder.encode(stimulus_sequence.stimulus_id)
         # [n_sequence, n_trial, n_dim]
-        stimulus_z = stimulus_sequence.z.astype(dtype=K.floatx())
+        stimulus_z = stimulus_z.astype(dtype=K.floatx())
         # [n_sequence, n_output]
         stimulus_labels = self._convert_labels(stimulus_sequence.class_id)
         stimulus_labels_one_hot = tf.one_hot(
@@ -474,7 +516,6 @@ class ALCOVE(CategoryLearningModel):
 
     def _build_tf_model(self, theta, n_timestep, batch_size):
         """Build tensorflow RNN model."""
-        print('Build Model')
         z_hidden = self.z.astype(dtype=K.floatx())
         n_output = self.n_class
 
@@ -491,8 +532,10 @@ class ALCOVE(CategoryLearningModel):
         )
         # TODO what shape information is actually necessary?
         # TODO Is timestep still necessary?
-        inp_1 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_dim))  # shape=(None, n_dim), batch_size=batch_size
-        inp_2 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_output))  # shape=(None, n_output), batch_size=batch_size
+        inp_1 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_dim))
+        # inp_1 shape=(None, n_dim), batch_size=batch_size
+        inp_2 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_output))
+        # inp_2 shape=(None, n_output), batch_size=batch_size
         output = rnn(NestedInput(z_in=inp_1, one_hot_label=inp_2))
         model = tf.keras.models.Model([inp_1, inp_2], output)
 
@@ -510,40 +553,39 @@ class ALCOVE(CategoryLearningModel):
 
     def _get_theta(self, params_local):
         """Return theta."""
-        # TODO this isn't quite right.
         theta = {
-            'rho': tf.constant(
-                params_local['rho'], dtype=K.floatx(), name='rho'
-            ),
-            'tau': tf.constant(
-                params_local['tau'], dtype=K.floatx(), name='tau'
-            ),
-            'beta': tf.constant(
-                params_local['beta'], dtype=K.floatx(), name='beta'
-            ),
-            'gamma': tf.constant(
-                params_local['gamma'], dtype=K.floatx(), name='gamma'
-            ),
-            # 'rho': tf.Variable(
-            #     initial_value=params_local['rho'],
-            #     trainable=False, constraint=GreaterEqualThan(min_value=1.),
-            #     dtype=K.floatx(), name='rho'
+            # 'rho': tf.constant(
+            #     params_local['rho'], dtype=K.floatx(), name='rho'
             # ),
-            # 'tau': tf.Variable(
-            #     initial_value=params_local['tau'],
-            #     trainable=False, constraint=GreaterEqualThan(min_value=1.),
-            #     dtype=K.floatx(), name='tau'
+            # 'tau': tf.constant(
+            #     params_local['tau'], dtype=K.floatx(), name='tau'
             # ),
-            # 'beta': tf.Variable(
-            #     initial_value=params_local['beta'],
-            #     trainable=False, constraint=GreaterEqualThan(min_value=1.),
-            #     dtype=K.floatx(), name='beta'
+            # 'beta': tf.constant(
+            #     params_local['beta'], dtype=K.floatx(), name='beta'
             # ),
-            # 'gamma': tf.Variable(
-            #     initial_value=params_local['gamma'],
-            #     trainable=False, constraint=NonNeg(),
-            #     dtype=K.floatx(), name='gamma'
+            # 'gamma': tf.constant(
+            #     params_local['gamma'], dtype=K.floatx(), name='gamma'
             # ),
+            'rho': tf.Variable(
+                initial_value=params_local['rho'],
+                trainable=False, constraint=GreaterEqualThan(min_value=1.),
+                dtype=K.floatx(), name='rho'
+            ),
+            'tau': tf.Variable(
+                initial_value=params_local['tau'],
+                trainable=False, constraint=GreaterEqualThan(min_value=1.),
+                dtype=K.floatx(), name='tau'
+            ),
+            'beta': tf.Variable(
+                initial_value=params_local['beta'],
+                trainable=False, constraint=GreaterEqualThan(min_value=1.),
+                dtype=K.floatx(), name='beta'
+            ),
+            'gamma': tf.Variable(
+                initial_value=params_local['gamma'],
+                trainable=False, constraint=NonNeg(),
+                dtype=K.floatx(), name='gamma'
+            ),
             'phi': tf.Variable(
                 initial_value=params_local['phi'],
                 trainable=True, constraint=NonNeg(),
@@ -612,7 +654,7 @@ NestedState = collections.namedtuple('NestedState', ['state1', 'state2'])
 
 
 class ALCOVECell(Layer):
-    """A RNN cell."""
+    """An RNN ALCOVE cell."""
 
     def __init__(self, theta, coordinates, n_output, batch_size, **kwargs):
         """Initialize."""
@@ -627,7 +669,6 @@ class ALCOVECell(Layer):
         self.rbf = WeightedMinkowski(coordinates, theta['rho'])
         self.batch_size = batch_size
         super(ALCOVECell, self).__init__(**kwargs)
-        print('  ACLOVECell init')
 
     # @tf.function
     def call(self, inputs, states):
@@ -639,12 +680,10 @@ class ALCOVECell(Layer):
                 one_hot_label: shape=(batch, n_output)]
 
         """
-        # print('    ALCOVECell call') TODO remove
-
         z_in, one_hot_label = tf.nest.flatten(inputs)
         attention, association = states
 
-        # Auto-diff version.
+        # Use TensorFlow gradients to update model state.
         state_variables = [attention, association]
         with tf.GradientTape(watch_accessed_variables=False, persistent=True) as state_tape:
             state_tape.watch(state_variables)
@@ -664,24 +703,21 @@ class ALCOVECell(Layer):
         dl_dw = state_tape.gradient(loss, association)
         del state_tape
 
-        # dl_da = 0
-        # dl_dw = 0
-
-        # tf.debugging.check_numerics(
-        #     dl_da,
-        #     'Check numerics `dl_da` in ALCOVECell.call',
-        #     name='check_alcovecell_call'
-        # )
-        # Handle nan's. TODO where are the nan's coming from?
-        # locs = tf.math.is_nan(dl_da)
-        # dl_da = tf.where(locs, tf.zeros(dl_da.shape), dl_da)
-
+        tf.debugging.check_numerics(
+            dl_dw,
+            'Check numerics `dl_dw`'
+        )
+        tf.debugging.check_numerics(
+            dl_da,
+            'Check numerics `dl_da`'
+        )
         # Response rule (keep as logits).
         x_out_scaled = tf.multiply(x_out, self.theta['phi'])
 
         # Update states.
         new_attention = attention - self.theta['lambda_a'] * dl_da
         new_attention = tf.math.maximum(new_attention, 0)
+        # new_attention = attention  # TODO CRITICAL For some reason passing on atttention as a state, destroys gradient.
         new_association = association - self.theta['lambda_w'] * dl_dw
 
         new_states = NestedState(
@@ -749,13 +785,15 @@ class WeightedMinkowski(Layer):
         # Weighted Minkowski distance.
         dist_qr_0 = tf.pow(tf.abs(z_q - z_r), self.rho)
         dist_qr_1 = tf.multiply(dist_qr_0, a)
-        dist_qr_2 = tf.pow(tf.reduce_sum(dist_qr_1, axis=-1), tf.math.divide(1., self.rho))
-
-        tf.debugging.check_numerics(
-            dist_qr_2,
-            'Check numerics `dist_qr` in _minkowski distance',
-            name='check_minkowski'
+        dist_qr_2 = tf.pow(
+            tf.reduce_sum(dist_qr_1, axis=-1), tf.math.divide(1., self.rho)
         )
+
+        # tf.debugging.check_numerics(
+        #     dist_qr_2,
+        #     'Check numerics `dist_qr` in _minkowski distance',
+        #     name='check_minkowski'
+        # )
         return dist_qr_2
 
 
@@ -769,7 +807,9 @@ class GreaterEqualThan(Constraint):
     def __call__(self, w):
         """Call."""
         w_adj = w - self.min_value
-        w2 = w_adj * math_ops.cast(math_ops.greater_equal(w_adj, 0.), K.floatx())
+        w2 = w_adj * math_ops.cast(
+            math_ops.greater_equal(w_adj, 0.), K.floatx()
+        )
         w2 = w2 + self.min_value
         return w2
 
@@ -798,49 +838,3 @@ def determine_class_loc(class_id, output_class_id):
         loc_class[locs, idx] = True
     loc_class = np.swapaxes(loc_class, 1, 2)
     return loc_class
-
-
-def project_attention(attention_in, attention_mode='classic'):
-    """Return projection of attention weights.
-
-    Arguments:
-        attention_in: Incoming attention weights.
-        attention_mode:
-
-    Returns:
-        attention_out: Projected attention weights.
-
-    """
-    # Settings.
-    cap = 2.2204e-16
-
-    # Make positive.
-    attention_0 = np.maximum(0, attention_in)
-
-    # Project.
-    n_dim = attention_in.shape[1]
-    attention_1 = np.sum(attention_0, axis=1, keepdims=True)
-    # Do not divide by zero.
-    locs_zero = np.equal(attention_1, 0)
-    attention_1[locs_zero] = cap
-    if attention_mode == 'classic':
-        attention_out = (attention_0 / attention_1)
-    else:
-        attention_out = n_dim * (attention_0 / attention_1)
-
-    # Check for weights that have zeroed out and reset them.
-    attention_sum = np.sum(attention_out, axis=1)
-    locs_bad = np.equal(attention_sum, 0)
-    attention_out[locs_bad, :] = 1
-
-    attention_sum = np.sum(attention_out, axis=1)
-    if np.sum(np.equal(attention_sum, 0)) > 0:
-        print('here')
-
-    # if np.sum(np.logical_not(np.isfinite(attention_out))) > 0:
-    #     print('bad attention projection')
-    # attention_sum = np.sum(attention_0, axis=1)
-    # locs = np.logical_not(np.isfinite(attention_sum))
-    # attention[locs, :] = 1
-
-    return attention_out

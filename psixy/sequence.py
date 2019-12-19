@@ -28,8 +28,11 @@ Functions:
     pad_trials: Pad trials.
 
 Todo:
-    * add setter for StimulusSequence.z
-    * Allow for list of lists in response times?
+    * change `is_feedback` to `feedback` which allows for more than two
+    levels (yes/no).
+    * `kind` as a catch all to be used/abused in what ever way the user wants
+    * MAYBE `kind` shape=(n_sequence, n_trial, n_level)
+    * MAYBE Allow for list of lists in response times?
 
 """
 
@@ -58,54 +61,43 @@ class TrialSequence(object):
     def __init__(self):
         """Initialize."""
         super().__init__()
-        self.version = '0.1.0'
+        self._version = '0.1.0'
 
 
 class StimulusSequence(TrialSequence):
     """Class for storing a stimulus sequence."""
 
     def __init__(
-            self, stimulus_id, class_id, z=None, is_real=None,
-            is_feedback=None, trial_type=None):
+            self, stimulus_id, class_id, is_feedback=None, kind=None,
+            mask=None):
         """Initialize.
 
         Arguments:
             stimulus_id: A unique identifier denoting a particular
                 stimulus.
-                shape = (n_sequence, n_trial)
+                shape=(n_sequence, n_trial)
             class_id: The correct class ID of the stimulus.
-                shape = (n_sequence, n_trial)
-            z: A feature representation (optional).
-                shape=(n_sequence, n_trial, n_feature)
-            is_real (optional): A boolean array indicating which trials
-                are filled with real data.
                 shape = (n_sequence, n_trial)
             is_feedback (optional): A Boolean array indicating if a
                 trial provides feedback. By default, all trials are
                 assumed to provide feedback.
-                shape = (n_sequence, n_trial)
-            trial_type (optional): An array of integers indicating the
+                shape=(n_sequence, n_trial)
+            kind (optional): An array of integers indicating the
                 type of trial. This information is useful for grabbing
                 subsets of the sequence.
-                shape = (n_sequence, n_trial)
+                shape=(n_sequence, n_trial)
+
         """
         self.stimulus_id = self._check_stimulus_id(stimulus_id)
         self.n_sequence = self.stimulus_id.shape[0]
         self.n_trial = self.stimulus_id.shape[1]
-
         self.class_id = self._check_class_id(class_id)
 
-        if z is not None:
-            self.z = self._check_z(z)
-            self.n_dim = self.z.shape[2]
+        if mask is None:
+            mask = np.ones([self.n_sequence, self.n_trial], dtype=bool)
         else:
-            self.n_dim = None
-
-        if is_real is None:
-            is_real = np.ones([self.n_sequence, self.n_trial], dtype=bool)
-        else:
-            is_real = self._check_is_real(is_real)
-        self.is_real = is_real
+            mask = self._check_mask(mask)
+        self.mask = mask
 
         if is_feedback is None:
             is_feedback = np.ones([self.n_sequence, self.n_trial], dtype=bool)
@@ -113,10 +105,36 @@ class StimulusSequence(TrialSequence):
             is_feedback = self._check_feedback(is_feedback)
         self.is_feedback = is_feedback
 
-        if trial_type is None:
-            trial_type = np.ones([self.n_sequence, self.n_trial], dtype=int)
-            trial_type[self.is_feedback] = 0
-        self.trial_type = trial_type
+        # TODO move this outside to application code.
+        if kind is None:
+            kind = np.ones([self.n_sequence, self.n_trial], dtype=int)
+            kind[self.is_feedback] = 0
+        self.kind = kind
+
+    def _check_stimulus_id(self, stimulus_id):
+        """Check `stimulus_id` argument.
+
+        Returns:
+            stimulus_id
+
+        Raises:
+            ValueError
+
+        """
+        # TODO test
+        if len(stimulus_id.shape) != 2:
+            raise ValueError((
+                "The argument `stimulus_id` must be a 2D array of "
+                "integers."))
+
+        if not issubclass(stimulus_id.dtype.type, np.integer):
+            raise ValueError((
+                "The argument `stimulus_id` must be a 2D array of "
+                "integers."))
+
+        # TODO check/test non-negative
+
+        return stimulus_id
 
     def _check_class_id(self, class_id):
         """Check `class_id` argument.
@@ -152,58 +170,8 @@ class StimulusSequence(TrialSequence):
                 "as `stimulus_id`."
             ))
 
+        # TODO check/test non-negative
         return class_id
-
-    def _check_z(self, z):
-        """Check `z` argument.
-
-        Returns:
-            z
-
-        Raises:
-            ValueError
-
-        """
-        if len(z.shape) < 3:
-            raise ValueError((
-                "The argument `z` must be at least a 3D array."
-            ))
-
-        if not z.shape[0] == self.n_sequence:
-            raise ValueError((
-                "The argument `z` must be the same number of sequences as "
-                "`stimulus_id`."
-            ))
-
-        if not z.shape[1] == self.n_trial:
-            raise ValueError((
-                "The argument `z` must be the same number of trials as "
-                "`stimulus_id`."
-            ))
-
-        return z.astype(dtype='float')
-
-    def _check_is_real(self, is_real):
-        """Check `is_real` argument.
-
-        Returns:
-            is_real
-
-        Raises:
-            ValueError
-
-        """
-        if len(is_real.shape) != 2:
-            raise ValueError((
-                "The argument `is_real` must be a 2D array of "
-                "booleans."))
-
-        if not issubclass(is_real.dtype.type, np.bool_):
-            raise ValueError((
-                "The argument `is_real` must be a 2D array of "
-                "booleans."))
-
-        return is_real
 
     def _check_feedback(self, is_feedback):
         """Check `is_feedback` argument.
@@ -229,27 +197,28 @@ class StimulusSequence(TrialSequence):
 
         return is_feedback
 
-    def _check_stimulus_id(self, stimulus_id):
-        """Check `stimulus_id` argument.
+    def _check_mask(self, mask):
+        """Check `mask` argument.
 
         Returns:
-            stimulus_id
+            mask
 
         Raises:
             ValueError
 
         """
-        if len(stimulus_id.shape) != 2:
+        # TODO test
+        if len(mask.shape) != 2:
             raise ValueError((
-                "The argument `stimulus_id` must be a 2D array of "
-                "integers."))
+                "The argument `mask` must be a 2D array of "
+                "booleans."))
 
-        if not issubclass(stimulus_id.dtype.type, np.integer):
+        if not issubclass(mask.dtype.type, np.bool_):
             raise ValueError((
-                "The argument `stimulus_id` must be a 2D array of "
-                "integers."))
+                "The argument `mask` must be a 2D array of "
+                "booleans."))
 
-        return stimulus_id
+        return mask
 
     def save(obj):
         """Save method for pickle."""
@@ -278,7 +247,9 @@ class BehaviorSequence(TrialSequence):
         self.weight = weight
 
         if group_id is None:
-            self.group_id = np.zeros([self.n_sequence, self.n_trial], dtype=int)
+            self.group_id = np.zeros(
+                [self.n_sequence, self.n_trial], dtype=int
+            )
         else:
             group_id = self._check_group_id(group_id)
         self.group_id = group_id
@@ -380,6 +351,7 @@ class ObservationSequence(object):
                 object.
             behavior_sequence: A psixy.sequence.BehaviorSequence
                 object.
+
         """
         if not stimulus_sequence.n_trial == behavior_sequence.n_trial:
             raise ValueError((
@@ -439,14 +411,11 @@ def stack(seq_list, postpend=True):
     # Grab relevant information from first entry in list.
     is_stim = True
     try:
-        z = pad_trial(
-            seq_list[0].z, max_n_trial, postpend=postpend
-        )
         class_id = pad_trial(
             seq_list[0].class_id, max_n_trial, postpend=postpend
         )
-        is_real = pad_trial(
-            seq_list[0].is_real, max_n_trial, postpend=postpend
+        mask = pad_trial(
+            seq_list[0].mask, max_n_trial, postpend=postpend
         )
         is_feedback = pad_trial(
             seq_list[0].is_feedback, max_n_trial, postpend=postpend
@@ -454,8 +423,8 @@ def stack(seq_list, postpend=True):
         stimulus_id = pad_trial(
             seq_list[0].stimulus_id, max_n_trial, postpend=postpend
         )
-        trial_type = pad_trial(
-            seq_list[0].trial_type, max_n_trial, postpend=postpend
+        kind = pad_trial(
+            seq_list[0].kind, max_n_trial, postpend=postpend
         )
     except AttributeError:
         is_stim = False
@@ -476,13 +445,10 @@ def stack(seq_list, postpend=True):
             )
             class_id = np.concatenate([class_id, curr_class_id], axis=0)
 
-            curr_z = pad_trial(i_seq.z, max_n_trial, postpend=postpend)
-            z = np.concatenate([z, curr_z], axis=0)
-
-            curr_is_real = pad_trial(
-                i_seq.is_real, max_n_trial, postpend=postpend
+            curr_mask = pad_trial(
+                i_seq.mask, max_n_trial, postpend=postpend
             )
-            is_real = np.concatenate([is_real, curr_is_real], axis=0)
+            mask = np.concatenate([mask, curr_mask], axis=0)
 
             curr_is_feedback = pad_trial(
                 i_seq.is_feedback, max_n_trial, postpend=postpend
@@ -491,15 +457,16 @@ def stack(seq_list, postpend=True):
                 [is_feedback, curr_is_feedback], axis=0
             )
 
-            curr_trial_type = pad_trial(
-                i_seq.trial_type, max_n_trial, postpend=postpend
+            curr_kind = pad_trial(
+                i_seq.kind, max_n_trial, postpend=postpend
             )
-            trial_type = np.concatenate(
-                [trial_type, curr_trial_type], axis=0
+            kind = np.concatenate(
+                [kind, curr_kind], axis=0
             )
+        # TODO update to new signature
         seq = StimulusSequence(
-            stimulus_id, class_id, is_real=is_real, is_feedback=is_feedback,
-            z=z, trial_type=trial_type
+            stimulus_id, class_id, is_feedback=is_feedback, kind=kind,
+            mask=mask
         )
     else:
         for i_seq in seq_list[1:]:
