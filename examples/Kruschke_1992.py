@@ -70,7 +70,7 @@ def main():
     fp_fig_5 = Path('examples', 'kruschke_1992_fig_5.pdf')
     fp_fig_14 = Path('examples', 'kruschke_1992_fig_14.pdf')
 
-    # create_figure_5(fp_fig_5)
+    create_figure_5(fp_fig_5)
     create_figure_14(fp_fig_14)
 
 
@@ -83,8 +83,12 @@ def create_figure_5(fp_fig_5):
     n_task = len(task_list)
     class_list = np.array([0, 1], dtype=int)
 
+    encoder = psixy.models.Deterministic(
+        task_list[0].stimulus_id, feature_matrix
+    )
+
     # Model without attention.
-    model_0 = psixy.models.ALCOVE(feature_matrix, class_list)
+    model_0 = psixy.models.ALCOVE(feature_matrix, class_list, encoder)
     model_0.params['rho'] = 1.0
     model_0.params['tau'] = 1.0
     model_0.params['beta'] = 6.5
@@ -93,7 +97,7 @@ def create_figure_5(fp_fig_5):
     model_0.params['lambda_a'] = 0.0
 
     # Model with attention.
-    model_attn = psixy.models.ALCOVE(feature_matrix, class_list)
+    model_attn = psixy.models.ALCOVE(feature_matrix, class_list, encoder)
     model_attn.params['rho'] = 1.0
     model_attn.params['tau'] = 1.0
     model_attn.params['beta'] = 6.5
@@ -106,8 +110,7 @@ def create_figure_5(fp_fig_5):
     for i_task in range(n_task):
         curr_task = task_list[i_task]
         stimulus_sequence = generate_fig5_stimulus_sequences(
-            curr_task.class_id, feature_matrix,
-            n_sequence, n_epoch
+            curr_task.class_id, n_sequence, n_epoch
         )
 
         prob_correct_attn = model_attn.predict(
@@ -176,8 +179,10 @@ def create_figure_14(fp_fig_14):
     task, feature_matrix, stimulus_label = psixy.task.kruschke_rules_and_exceptions()
     class_list = np.array([0, 1], dtype=int)
 
+    encoder = psixy.models.Deterministic(task.stimulus_id, feature_matrix)
+
     # Model without attention.
-    model_attn = psixy.models.ALCOVE(feature_matrix, class_list)
+    model_attn = psixy.models.ALCOVE(feature_matrix, class_list, encoder)
     model_attn.params['rho'] = 1.0
     model_attn.params['tau'] = 1.0
     model_attn.params['beta'] = 3.5
@@ -186,7 +191,7 @@ def create_figure_14(fp_fig_14):
     model_attn.params['lambda_a'] = 0.010
 
     stimulus_sequence = generate_fig_14_stimulus_sequences(
-        task.class_id, feature_matrix, n_sequence, n_epoch
+        task.class_id, n_sequence, n_epoch
     )
 
     prob_correct_attn = model_attn.predict(stimulus_sequence, mode='correct')
@@ -274,7 +279,7 @@ def epoch_analysis_stimulus(
 
 
 def generate_fig5_stimulus_sequences(
-        class_id_in, feature_matrix, n_sequence, n_epoch):
+        class_id_in, n_sequence, n_epoch):
     """Generate stimulus sequences."""
     n_stimuli = len(class_id_in)
     cat_idx = np.arange(n_stimuli, dtype=int)
@@ -288,16 +293,15 @@ def generate_fig5_stimulus_sequences(
             )
         cat_idx_all[i_seq, :] = curr_cat_idx
 
-    z = feature_matrix[cat_idx_all, :]
     class_id = class_id_in[cat_idx_all]
     stimulus_sequence = psixy.sequence.StimulusSequence(
-        cat_idx_all, class_id, z=z
+        cat_idx_all, class_id
     )
+
     return stimulus_sequence
 
 
-def generate_fig_14_stimulus_sequences(
-        class_id_in, feature_matrix, n_sequence, n_epoch):
+def generate_fig_14_stimulus_sequences(class_id_in, n_sequence, n_epoch):
     """Generate stimulus sequences."""
     n_stimuli = len(class_id_in)
     epoch_cat_idx = np.hstack([
@@ -318,10 +322,9 @@ def generate_fig_14_stimulus_sequences(
             )
         cat_idx_all[i_seq, :] = curr_cat_idx
 
-    z = feature_matrix[cat_idx_all, :]
     class_id = class_id_in[cat_idx_all]
     stimulus_sequence = psixy.sequence.StimulusSequence(
-        cat_idx_all, class_id, z=z
+        cat_idx_all, class_id
     )
     return stimulus_sequence
 
