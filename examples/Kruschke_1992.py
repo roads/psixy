@@ -153,6 +153,7 @@ def create_figure_5(fp_fig_5):
 
     ax = plt.subplot(1, 2, 2)
     for i_task in range(n_task):
+        curr_task = task_list[i_task]
         ax.plot(
             accuracy_epoch_attn[i_task, :],
             marker='o', markersize=3,

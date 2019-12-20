@@ -338,7 +338,7 @@ class ALCOVE(CategoryLearningModel):
         )
 
         theta = self._get_theta(self.params)  # TODO
-        model, rnn, initial_states = self._build_tf_model(theta, batch_size)
+        model = self._build_tf_model(theta, batch_size)
         # model_parameters = list(theta.values())  # TODO DELETE?
 
         loss_train = self.evaluate(stimulus_sequence, behavior_sequence)
@@ -353,9 +353,7 @@ class ALCOVE(CategoryLearningModel):
             # Random initialization of variables (with bounds and trainable settings appropriately set).  TODO
 
             # Perform optimization restart.
-            curr_loss_train, curr_params = self._fit_restart(
-                dataset, model, rnn, initial_states
-            )
+            curr_loss_train, curr_params = self._fit_restart(dataset, model)
 
             if verbose > 1:
                 print('Restart {0}'.format(i_restart))
@@ -383,7 +381,7 @@ class ALCOVE(CategoryLearningModel):
 
     def predict(
             self, stimulus_sequence, group_id=None, mode='all',
-            stateful=False, verbose=0):
+            verbose=0):
         """Predict behavior.
 
         Arguments:
@@ -395,7 +393,6 @@ class ALCOVE(CategoryLearningModel):
                 probabilities for all output categories will be
                 returned. If 'correct', only returns the response
                 probabilities for the the correct category.
-            stateful: TODO
             verbose: Integer indicating verbosity of outout.
 
         Returns:
@@ -414,7 +411,7 @@ class ALCOVE(CategoryLearningModel):
         dataset = seq_dataset.batch(batch_size, drop_remainder=True)
 
         theta = self._get_theta(self.params)
-        model, _, _ = self._build_tf_model(theta, batch_size)
+        model = self._build_tf_model(theta, batch_size)
 
         # TODO This logic will break with other batch sizes.
         for input_batch in dataset.take(1):
@@ -440,13 +437,13 @@ class ALCOVE(CategoryLearningModel):
             raise ValueError(
                 'Undefined option {0} for mode argument.'.format(str(mode))
             )
+        # TODO should I return the model state as well?
         return res.numpy()
 
-    def _fit_restart(self, dataset, model, rnn, initial_states):
+    def _fit_restart(self, dataset, model):
         """Fit restart."""
-        def objective_func(dataset, rnn):
+        def objective_func(dataset):
             for (i_batch, (input_batch, target_batch)) in enumerate(dataset):
-                # rnn.reset_states(states=initial_states) TODO critical
                 logit_response_batch = model(input_batch)
                 loss = tf.keras.losses.categorical_crossentropy(
                     target_batch, logit_response_batch, from_logits=True
@@ -495,22 +492,13 @@ class ALCOVE(CategoryLearningModel):
     def _build_tf_model(self, theta, batch_size):
         """Build tensorflow RNN model.
 
-        We must use an RNN with stateful=True in order to call
-        `reset_states`. Since we are using stateful=True, we must also
-        provide the batch_size. Initial state also looks at batch
-        size.
+        Note if using an RNN with stateful=True, we must also
+        provide the batch_size and call rnn.reset_states().
 
         """
         rbf_nodes = self.rbf_nodes.astype(dtype=K.floatx())
 
-        # Create initial state.
-        # attention = np.ones(
-        #     [batch_size, self.n_dim], dtype=K.floatx()
-        # ) / self.n_dim
-        # association = np.zeros(
-        #     [batch_size, self.n_rbf, self.n_output], dtype=K.floatx()
-        # )
-        # initial_states = [attention, association]
+        # Define initial state.
         attention = tf.ones(
             [batch_size, self.n_dim], dtype=K.floatx()
         ) / self.n_dim
@@ -519,29 +507,29 @@ class ALCOVE(CategoryLearningModel):
         )
         initial_states = [attention, association]
 
-        # Define inputs. Since we are using stateful, we must specify
-        # `batch_size`.
+        # Define inputs.
         # Full shape information.
         # inp_1 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_dim))
         # inp_1 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_dim))
         # Partial shape information.
-        inp_1 = tf.keras.Input(batch_shape=(batch_size, None, self.n_dim))
-        inp_2 = tf.keras.Input(batch_shape=(batch_size, None, self.n_output))
+        # inp_1 = tf.keras.Input(batch_shape=(batch_size, None, self.n_dim))
+        # inp_2 = tf.keras.Input(batch_shape=(batch_size, None, self.n_output))
         # Minimal shape information.
-        # inp_1 = tf.keras.Input(shape=(None, n_dim))
-        # inp_2 = tf.keras.Input(shape=(None, n_output))
+        inp_1 = tf.keras.Input(shape=(None, self.n_dim))
+        inp_2 = tf.keras.Input(shape=(None, self.n_output))
 
         # Define RNN.
         cell = ALCOVECell(theta, rbf_nodes, self.n_output)
-        rnn = tf.keras.layers.RNN(cell, return_sequences=True, stateful=True)
+        rnn = tf.keras.layers.RNN(cell, return_sequences=True, stateful=False)
 
         # Assemble model.
-        output = rnn(NestedInput(z_in=inp_1, one_hot_label=inp_2), initial_state=initial_states)
+        output = rnn(
+            NestedInput(z_in=inp_1, one_hot_label=inp_2),
+            initial_state=initial_states
+        )
         model = tf.keras.models.Model([inp_1, inp_2], output)
 
-        # rnn.reset_states(states=initial_states) TODO critical
-
-        return model, rnn, initial_states
+        return model
 
     def _convert_class_id(self, class_id_array):
         """Convert external class IDs to internal class indices."""
@@ -648,9 +636,6 @@ def humble_teacher_loss(desired_y, predicted_y):
 NestedInput = collections.namedtuple('NestedInput', ['z_in', 'one_hot_label'])
 
 
-NestedState = collections.namedtuple('NestedState', ['state1', 'state2'])
-
-
 class ALCOVECell(Layer):
     """An RNN ALCOVE cell."""
 
@@ -666,11 +651,6 @@ class ALCOVECell(Layer):
         self.theta = theta
         n_rbf = rbf_nodes.shape[0]
         n_dim = rbf_nodes.shape[1]
-        # TODO critical
-        # self.state_size = NestedState(
-        #     state1=tf.TensorShape([n_dim]),
-        #     state2=tf.TensorShape([n_rbf, n_output])
-        # )
         self.state_size = [
             tf.TensorShape([n_dim]),
             tf.TensorShape([n_rbf, n_output])
@@ -688,7 +668,8 @@ class ALCOVECell(Layer):
 
         """
         z_in, one_hot_label = tf.nest.flatten(inputs)
-        attention, association = states
+        attention = states[0]  # Previous attention weights state.
+        association = states[1]  # Previous association weights state.
 
         # Use TensorFlow gradients to update model state.
         state_variables = [attention, association]
@@ -720,9 +701,6 @@ class ALCOVECell(Layer):
         # as a state. Set new_attention = attention, to see.
         new_association = association - self.theta['lambda_w'] * dl_dw
 
-        # new_states = NestedState(
-        #     state1=new_attention, state2=new_association
-        # )  TODO critical
         new_states = [
             new_attention,
             new_association
