@@ -38,11 +38,9 @@ Notes:
 Todo:
     * different optimizers
     * loss term and humble teacher
-    * WeightedMinkowski what should weight default be?
     * Use lazy weight initialization that doesn't require n_sequence
         on initialization.
     * Makes sure gradients are being computed correctly.
-    * MAYBE self.n_class => self.n_output
 
 """
 
@@ -99,12 +97,18 @@ class Deterministic(Encoder):
         """Initialize.
 
         Arguments:
-            d: A dictionary of the mapping.
+            stimulus_id: A 1D NumPy array of stimulus IDs.
+                shape=(n_stimuli,)
+            z: A 2D NumPy array of representations where each row
+                indicates the feature representation of the
+                corresponding stimulus in `stimulus_id`.
+                shape=(n_stimuli, n_dim)
 
         """
         # TODO checks and tests
         self.stimulus_id = stimulus_id
-        self.z = z
+        self.n_stimuli = len(stimulus_id)
+        self.z = self._check_z(z)
 
     def encode(self, stimulus_id):
         """Encode stimulus IDs as feature representation.
@@ -129,6 +133,29 @@ class Deterministic(Encoder):
 
         return z
 
+    def _check_z(self, z):
+        """Check `z` argument.
+
+        Returns:
+            z
+
+        Raises:
+            ValueError
+
+        """
+        if len(z.shape) != 2:
+            raise ValueError((
+                "The argument `z` must be a 2D NumPy array."
+            ))
+
+        if z.shape[0] != self.n_stimuli:
+            raise ValueError((
+                "The argument `z` must be a 2D NumPy array with the same "
+                "number of rows as the length of `stimulus_id`."
+            ))
+
+        return z.astype(dtype='float')
+
 
 class CategoryLearningModel(object):
     """Abstract base class for category learning models.
@@ -144,10 +171,9 @@ class CategoryLearningModel(object):
 
     __metaclass__ = ABCMeta
 
-    # TODO
-    # def __init__(self):
-    #     """Initialize."""
-    #     super().__init__()
+    def __init__(self):
+        """Initialize."""
+        super().__init__()
 
     @abstractmethod
     def fit(self, stimulus_seq, behavior_seq, options=None, verbose=0):
@@ -174,7 +200,7 @@ class ALCOVE(CategoryLearningModel):
     The original model presented in [1] assumed that rho=1, tau=1, and
     gamma=0.
 
-    Attributes:
+    Attributes: TODO
         params: Dictionary for the model's free parameters.
             rho: Parameter governing the Minkowski metric [1,inf]
             tau: Parameter governing the shape of the RBF [1,inf]
@@ -190,8 +216,8 @@ class ALCOVE(CategoryLearningModel):
 
     Methods:
         fit:
-        evaluate:
         predict:
+        evaluate:
 
     This model can be used to instantiate either a 'training exemplar'
     or 'covering map' variant of ALCOVE. Just pass in the locations of
@@ -213,38 +239,37 @@ class ALCOVE(CategoryLearningModel):
 
     """
 
-    def __init__(self, z, class_id, encoder, verbose=0):
+    def __init__(self, rbf_nodes, output_classes, encoder, verbose=0):
         """Initialize.
 
         Arguments:
-            z: A two-dimension array denoting the location of the
-                hidden nodes in psychological space. Each row is
-                the representation corresponding to a single stimulus.
+            rbf_nodes: A 2D NumPy array denoting the location of the
+                RBF hidden nodes in psychological space. Each row
+                corresponds to the representation of a single stimulus.
                 Each column corresponds to a distinct feature
                 dimension.
-            class_id: A list of class ID's. The order of this list
-                determines the output order of the model.
-            encoder: TODO
+            output_classes: A 1D NumPy integer array of unique class
+                ID's. The order of this list determines the output
+                order of the model.
+            encoder: A psixy.models.Encoder object.
             verbose (optional): Verbosity of output.
 
         """
         self.encoder = encoder
 
-        # At initialization, ALCOVE must know the locations of the RBFs and
-        # the unique classes.
-        self.z = z.astype(dtype=K.floatx())
-        self.n_hidden = z.shape[0]
-        self.n_dim = z.shape[1]
-        self.output_class_id = self._check_class_id(class_id)
-        self.n_class = self.output_class_id.shape[0]
+        # At initialization, ALCOVE must know the locations of the RBFs.
+        self.rbf_nodes = rbf_nodes.astype(dtype=K.floatx())
+        self.n_rbf = rbf_nodes.shape[0]
+        self.n_dim = rbf_nodes.shape[1]
 
-        # Map IDs.
-        self.class_map = {}
-        for i_class in range(self.n_class):
-            self.class_map[self.output_class_id[i_class]] = i_class
-
-        # Settings.
-        self.attention_mode = 'classic'  # TODO remove?
+        # At initialization, ALCOVE must know the possible output classes.
+        # Create a mapping between external (i.e., user-defined) class ID's
+        # and internally used class indices.
+        output_classes = self._check_output_classes(output_classes)
+        self.n_output = output_classes.shape[0]
+        self.class_id_idx_map = {}
+        for class_idx in range(self.n_output):
+            self.class_id_idx_map[output_classes[class_idx]] = class_idx
 
         # Free parameters.
         self.params = {
@@ -279,8 +304,8 @@ class ALCOVE(CategoryLearningModel):
         if verbose > 0:
             print('ALCOVE initialized')
             print('  Input dimension: ', self.n_dim)
-            print('  Number of hidden nodes: ', self.n_hidden)
-            print('  Number of output classes: ', self.n_class)
+            print('  Number of RBF nodes: ', self.n_rbf)
+            print('  Number of output classes: ', self.n_output)
 
     def fit(
             self, stimulus_sequence, behavior_sequence, options=None,
@@ -313,10 +338,8 @@ class ALCOVE(CategoryLearningModel):
         )
 
         theta = self._get_theta(self.params)  # TODO
-        model, rnn, initial_states = self._build_tf_model(
-            theta, stimulus_sequence.n_trial, batch_size
-        )
-        model_parameters = list(theta.values())  # TODO DELETE?
+        model, rnn, initial_states = self._build_tf_model(theta, batch_size)
+        # model_parameters = list(theta.values())  # TODO DELETE?
 
         loss_train = self.evaluate(stimulus_sequence, behavior_sequence)
         beat_initialization = False
@@ -358,15 +381,6 @@ class ALCOVE(CategoryLearningModel):
 
         return loss_train
 
-    def evaluate(self, stimulus_sequence, behavior_sequence, verbose=0):
-        """Evaluate."""
-        loss = self._loss(
-            self.params, stimulus_sequence, behavior_sequence
-        )
-        if verbose > 0:
-            print("loss: {0:.2f}".format(loss))
-        return loss
-
     def predict(
             self, stimulus_sequence, group_id=None, mode='all',
             stateful=False, verbose=0):
@@ -400,22 +414,20 @@ class ALCOVE(CategoryLearningModel):
         dataset = seq_dataset.batch(batch_size, drop_remainder=True)
 
         theta = self._get_theta(self.params)
-        model, _, _ = self._build_tf_model(
-            theta, stimulus_sequence.n_trial, batch_size
-        )
+        model, _, _ = self._build_tf_model(theta, batch_size)
 
+        # TODO This logic will break with other batch sizes.
         for input_batch in dataset.take(1):
             logit_response_batch = model(input_batch)
-
         logit_response = logit_response_batch
 
         # Convert logits to probabilities.
         prob_response = tf.math.softmax(logit_response, axis=2)
 
         if mode == 'correct':
-            stimuli_labels = self._convert_labels(stimulus_sequence.class_id)
+            stimuli_labels = self._convert_class_id(stimulus_sequence.class_id)
             stimuli_labels_one_hot = tf.one_hot(
-                stimuli_labels, self.n_class, axis=2
+                stimuli_labels, self.n_output, axis=2
             )
             prob_response_correct = prob_response * stimuli_labels_one_hot
             prob_response_correct = tf.reduce_sum(
@@ -434,7 +446,7 @@ class ALCOVE(CategoryLearningModel):
         """Fit restart."""
         def objective_func(dataset, rnn):
             for (i_batch, (input_batch, target_batch)) in enumerate(dataset):
-                rnn.reset_states(states=initial_states)
+                # rnn.reset_states(states=initial_states) TODO critical
                 logit_response_batch = model(input_batch)
                 loss = tf.keras.losses.categorical_crossentropy(
                     target_batch, logit_response_batch, from_logits=True
@@ -457,49 +469,15 @@ class ALCOVE(CategoryLearningModel):
         params = res.x
         return loss_train, params
 
-    def _check_class_id(self, class_id):
-        """Check `class_id` argument."""
-        if not len(np.unique(class_id)) == len(class_id):
-            raise ValueError(
-                'The argument `class_id` must contain all unique'
-                ' integers.'
-            )
-
-        return class_id
-
-    def _loss(self, params_local, stimulus_sequence, behavior_sequence):
-        """Compute the negative log-likelihood of the data given model."""
-        prob_response = self._run(params_local, stimulus_sequence)
-
-        behavior_labels = self._convert_labels(behavior_sequence.class_id)
-        behavior_labels_one_hot = tf.one_hot(
-            behavior_labels, self.n_class, axis=2
-        )
-        # TODO use tf categorical cross entropy
-        prob_response_correct = tf.reduce_sum(
-            prob_response * behavior_labels_one_hot, axis=2
-        )
-        loss_all = -1 * tf.log(prob_response_correct)
-
-        # Scalar loss (average within a sequence, then across sequences.)
-        loss_train = tf.reduce_mean(loss_all, axis=1)
-        loss_train = tf.reduce_mean(loss_train)
-        loss_train = loss_train.numpy()
-
-        if np.isnan(loss_train):
-            loss_train = np.inf
-
-        return loss_train
-
     def _prepare_inputs(self, stimulus_sequence):
         """Prepare inputs for TensorFlow model."""
         stimulus_z = self.encoder.encode(stimulus_sequence.stimulus_id)
         # [n_sequence, n_trial, n_dim]
         stimulus_z = stimulus_z.astype(dtype=K.floatx())
         # [n_sequence, n_output]
-        stimulus_labels = self._convert_labels(stimulus_sequence.class_id)
+        stimulus_labels = self._convert_class_id(stimulus_sequence.class_id)
         stimulus_labels_one_hot = tf.one_hot(
-            stimulus_labels, self.n_class, axis=2
+            stimulus_labels, self.n_output, axis=2
         )
         inputs = {'0': stimulus_z, '1': stimulus_labels_one_hot}
         return inputs
@@ -507,49 +485,71 @@ class ALCOVE(CategoryLearningModel):
     def _prepare_targets(self, behavior_sequence):
         """Prepare targets."""
         # [n_sequence, n_output]
-        behavior_labels = self._convert_labels(behavior_sequence.class_id)
+        behavior_labels = self._convert_class_id(behavior_sequence.class_id)
         behavior_labels_one_hot = tf.one_hot(
-            behavior_labels, self.n_class, axis=2
+            behavior_labels, self.n_output, axis=2
         )
         targets = behavior_labels_one_hot
         return targets
 
-    def _build_tf_model(self, theta, n_timestep, batch_size):
-        """Build tensorflow RNN model."""
-        z_hidden = self.z.astype(dtype=K.floatx())
-        n_output = self.n_class
+    def _build_tf_model(self, theta, batch_size):
+        """Build tensorflow RNN model.
 
-        n_hidden = z_hidden.shape[0]
-        n_dim = z_hidden.shape[1]
-        attention = np.ones([batch_size, n_dim], dtype=K.floatx()) / n_dim
-        association = np.zeros(
-            [batch_size, n_hidden, n_output], dtype=K.floatx()
+        We must use an RNN with stateful=True in order to call
+        `reset_states`. Since we are using stateful=True, we must also
+        provide the batch_size. Initial state also looks at batch
+        size.
+
+        """
+        rbf_nodes = self.rbf_nodes.astype(dtype=K.floatx())
+
+        # Create initial state.
+        # attention = np.ones(
+        #     [batch_size, self.n_dim], dtype=K.floatx()
+        # ) / self.n_dim
+        # association = np.zeros(
+        #     [batch_size, self.n_rbf, self.n_output], dtype=K.floatx()
+        # )
+        # initial_states = [attention, association]
+        attention = tf.ones(
+            [batch_size, self.n_dim], dtype=K.floatx()
+        ) / self.n_dim
+        association = tf.zeros(
+            [batch_size, self.n_rbf, self.n_output], dtype=K.floatx()
         )
         initial_states = [attention, association]
-        cell = ALCOVECell(theta, z_hidden, n_output, batch_size=batch_size)
-        rnn = tf.keras.layers.RNN(
-            cell, return_sequences=True, stateful=True
-        )
-        # TODO what shape information is actually necessary?
-        # TODO Is timestep still necessary?
-        inp_1 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_dim))
-        # inp_1 shape=(None, n_dim), batch_size=batch_size
-        inp_2 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_output))
-        # inp_2 shape=(None, n_output), batch_size=batch_size
-        output = rnn(NestedInput(z_in=inp_1, one_hot_label=inp_2))
+
+        # Define inputs. Since we are using stateful, we must specify
+        # `batch_size`.
+        # Full shape information.
+        # inp_1 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_dim))
+        # inp_1 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_dim))
+        # Partial shape information.
+        inp_1 = tf.keras.Input(batch_shape=(batch_size, None, self.n_dim))
+        inp_2 = tf.keras.Input(batch_shape=(batch_size, None, self.n_output))
+        # Minimal shape information.
+        # inp_1 = tf.keras.Input(shape=(None, n_dim))
+        # inp_2 = tf.keras.Input(shape=(None, n_output))
+
+        # Define RNN.
+        cell = ALCOVECell(theta, rbf_nodes, self.n_output)
+        rnn = tf.keras.layers.RNN(cell, return_sequences=True, stateful=True)
+
+        # Assemble model.
+        output = rnn(NestedInput(z_in=inp_1, one_hot_label=inp_2), initial_state=initial_states)
         model = tf.keras.models.Model([inp_1, inp_2], output)
 
-        rnn.reset_states(states=initial_states)
+        # rnn.reset_states(states=initial_states) TODO critical
 
         return model, rnn, initial_states
 
-    def _convert_labels(self, labels):
-        """Convert labels."""
-        labels_conv = np.zeros(labels.shape, dtype=int)
-        for key, value in self.class_map.items():
-            locs = np.equal(labels, key)
-            labels_conv[locs] = value
-        return labels_conv
+    def _convert_class_id(self, class_id_array):
+        """Convert external class IDs to internal class indices."""
+        class_idx_array = np.zeros(class_id_array.shape, dtype=int)
+        for class_id, class_idx in self.class_id_idx_map.items():
+            locs = np.equal(class_id_array, class_id)
+            class_idx_array[locs] = class_idx
+        return class_idx_array
 
     def _get_theta(self, params_local):
         """Return theta."""
@@ -604,32 +604,30 @@ class ALCOVE(CategoryLearningModel):
         }
         return theta
 
-    def _rand_param(self):
-        """Randomly sample parameter setting."""
-        param_0 = []
-        for bnd_set in self._get_bounds():
-            start = bnd_set[0]
-            width = bnd_set[1] - bnd_set[0]
-            param_0.append(start + (np.random.rand(1)[0] * width))
-        return param_0
+    def _check_output_classes(self, class_id):
+        """Check `class_id` argument."""
+        if not issubclass(class_id.dtype.type, np.integer):
+            raise ValueError((
+                "The argument `class_id` must be a 1D NumPy array of "
+                "unique integers. The array you supplied is not "
+                "composed of integers."
+            ))
 
-    def _get_bounds(self):
-        """Return bounds."""
-        bnds = [
-            self._params['rho']['bounds'],
-            self._params['tau']['bounds'],
-            self._params['beta']['bounds'],
-            self._params['gamma']['bounds'],
-            self._params['phi']['bounds'],
-            self._params['lambda_w']['bounds'],
-            self._params['lambda_a']['bounds'],
-        ]
-        return bnds
+        # TODO check non-negative?
+
+        if not len(np.unique(class_id)) == len(class_id):
+            raise ValueError(
+                "The argument `class_id` must be a 1D NumPy array of "
+                "unique integers. The array you supplied is not "
+                "composed of unique integers."
+            )
+
+        return class_id
 
 
 # @tf.function
-def alcove_loss(desired_y, predicted_y):
-    """ALCOVE loss."""
+def humble_teacher_loss(desired_y, predicted_y):
+    """Humble teacher loss as described in ALCOVE model."""
     min_val = math_ops.cast(-1.0, K.floatx())
     teacher_y_min = tf.minimum(min_val, predicted_y)
 
@@ -656,21 +654,30 @@ NestedState = collections.namedtuple('NestedState', ['state1', 'state2'])
 class ALCOVECell(Layer):
     """An RNN ALCOVE cell."""
 
-    def __init__(self, theta, coordinates, n_output, batch_size, **kwargs):
-        """Initialize."""
+    def __init__(self, theta, rbf_nodes, n_output, **kwargs):
+        """Initialize.
+
+        Arguments:
+            theta:
+            rbf_nodes:
+            n_output:
+
+        """
         self.theta = theta
-        self.n_dim = coordinates.shape[1]
-        self.n_hidden = coordinates.shape[0]
-        self.n_output = n_output
-        self.state_size = NestedState(
-            state1=tf.TensorShape([self.n_dim]),
-            state2=tf.TensorShape([self.n_hidden, self.n_output])
-        )
-        self.rbf = WeightedMinkowski(coordinates, theta['rho'])
-        self.batch_size = batch_size
+        n_rbf = rbf_nodes.shape[0]
+        n_dim = rbf_nodes.shape[1]
+        # TODO critical
+        # self.state_size = NestedState(
+        #     state1=tf.TensorShape([n_dim]),
+        #     state2=tf.TensorShape([n_rbf, n_output])
+        # )
+        self.state_size = [
+            tf.TensorShape([n_dim]),
+            tf.TensorShape([n_rbf, n_output])
+        ]
+        self.rbf = MinkowskiRBF(rbf_nodes, theta['rho'])
         super(ALCOVECell, self).__init__(**kwargs)
 
-    # @tf.function
     def call(self, inputs, states):
         """Call.
 
@@ -693,107 +700,100 @@ class ALCOVECell(Layer):
                 tf.negative(self.theta['beta']) * tf.pow(d, self.theta['tau'])
             ) + self.theta['gamma']
             # Compute output activations.
-            # Convert to shape=(batch_size, n_hidden, n_output)
+            # Convert to shape=(batch_size, n_rbf, n_output)
             s2 = tf.expand_dims(s, axis=2)
             x2 = tf.multiply(s2, association)
             x_out = tf.reduce_sum(x2, axis=1)
-            # Compute ALCOVE loss.
-            loss = alcove_loss(one_hot_label, x_out)
+            # Compute loss.
+            loss = humble_teacher_loss(one_hot_label, x_out)
         dl_da = state_tape.gradient(loss, attention)
         dl_dw = state_tape.gradient(loss, association)
         del state_tape
 
-        tf.debugging.check_numerics(
-            dl_dw,
-            'Check numerics `dl_dw`'
-        )
-        tf.debugging.check_numerics(
-            dl_da,
-            'Check numerics `dl_da`'
-        )
         # Response rule (keep as logits).
         x_out_scaled = tf.multiply(x_out, self.theta['phi'])
 
         # Update states.
         new_attention = attention - self.theta['lambda_a'] * dl_da
         new_attention = tf.math.maximum(new_attention, 0)
-        # new_attention = attention  # TODO CRITICAL For some reason passing on atttention as a state, destroys gradient.
+        # TODO For some reason, gradient is destroyed when attention is passed
+        # as a state. Set new_attention = attention, to see.
         new_association = association - self.theta['lambda_w'] * dl_dw
 
-        new_states = NestedState(
-            state1=new_attention, state2=new_association
-        )
+        # new_states = NestedState(
+        #     state1=new_attention, state2=new_association
+        # )  TODO critical
+        new_states = [
+            new_attention,
+            new_association
+        ]
         return x_out_scaled, new_states
 
 
-class WeightedMinkowski(Layer):
-    """Compute the weighted Minkowski distance.
+class MinkowskiRBF(Layer):
+    """A layer of weighted Minkowski distance RBF nodes.
 
-    Distance is computed between the input(s) and a pre-defined
-    set of coordinates.
+    A weighted distance is computed between the input(s) and a
+    pre-defined set of RBF nodes.
+
+    Note that the mathematical form is consistent with a weighted
+    Minkowski distance, but the user may supply weights that do not
+    sum to one.
+
+    Singleton dimensions are added to exploit broadcasting rules,
+    resulting in 3D Tensors that have dimensions with the following
+    interpretation: (batch size, n_rbf, n_dim).
+
     """
 
-    def __init__(self, coordinates, rho):
-        """Initialize."""
-        super(WeightedMinkowski, self).__init__()
-        self.coordinates = coordinates
-        self.n_hidden = coordinates.shape[0]
-        self.n_dim = coordinates.shape[1]
-        self.rho = rho
-        # self.dist_qr_0 = tf.zeros((2, self.n_hidden, self.n_dim))  # TODO
+    def __init__(self, rbf_nodes, rho):
+        """Initialize.
 
-    def call(self, z_in, attention):
+        Arguments:
+            rbf_nodes: A 2D Tensor indicating the RBF coordinates.
+                shape=(n_rbf, n_dim)
+            rho: The parameter governing the Minkowski distance. For
+                example, rho=1 results in a city-block distance and
+                rho=2 results in Euclidean distance.
+
+        """
+        super(MinkowskiRBF, self).__init__()
+        self.rho = rho
+        # Expand RBF nodes to have singleton batch_size dimension.
+        # rbf_nodes.shape = (1, n_rfb, n_dim)
+        self.rbf_nodes = tf.expand_dims(rbf_nodes, axis=0)
+
+    def call(self, z_q, w):
         """Call.
 
         Arguments:
-            z_in: (batch_size, n_dim)
-            attention: shape=(batch_size, n_dim)
-
-        """
-        # Add dimensions to exploit broadcasting rules.
-        # e.g., shape (batch size, n_hidden, n_dim)
-
-        # Expand inputs to have singleton n_hidden dimension.
-        z_q = tf.expand_dims(z_in, axis=1)
-
-        # Expand inputs to have singleton n_hidden dimension.
-        a = tf.expand_dims(attention, axis=1)
-
-        # Expand coordinates to have singleton batch_size dimension.
-        z_r = tf.expand_dims(self.coordinates, axis=0)
-
-        return self._minkowski_distance(z_q, z_r, a)
-
-    def _minkowski_distance(self, z_q, z_r, a):
-        """Weighted Minkowski distance.
-
-        Arguments:
-            z_q: A set of embedding points.
-                shape = (batch_size, 1, n_dim)
-            z_r: A set of embedding points.
-                shape = (1, n_hidden, n_dim)
-            a: The weights allocated to each dimension
-                in a weighted minkowski metric.
-                shape = (batch_size, 1, n_dim)
+            z_q: A 2D Tensor indicating the incoming set of query
+                coordinates.
+                shape=(batch_size, n_dim)
+            w: A 2D Tensor indicating the weights to apply to each
+                dimension.
+                shape=(batch_size, n_dim)
 
         Returns:
-            The corresponding similarity between rows of embedding
-                points.
-                shape = (batch_size, n_hidden)
+            The corresponding weighted distance between each query
+                coordinate and every RBF coordinate.
+                shape = (batch_size, n_rbf)
 
         """
-        # Weighted Minkowski distance.
-        dist_qr_0 = tf.pow(tf.abs(z_q - z_r), self.rho)
-        dist_qr_1 = tf.multiply(dist_qr_0, a)
+        # Expand inputs to have singleton n_rbf dimension.
+        # z_q_ex.shape = (batch_size, 1, n_dim)
+        z_q_ex = tf.expand_dims(z_q, axis=1)
+
+        # Expand dimension weights to have singleton n_rbf dimension.
+        # w_ex.shape = (batch_size, 1, n_dim)
+        w_ex = tf.expand_dims(w, axis=1)
+
+        # Compute the weighted Minkowski distance.
+        dist_qr_0 = tf.pow(tf.abs(z_q_ex - self.rbf_nodes), self.rho)
+        dist_qr_1 = tf.multiply(dist_qr_0, w_ex)
         dist_qr_2 = tf.pow(
             tf.reduce_sum(dist_qr_1, axis=-1), tf.math.divide(1., self.rho)
         )
-
-        # tf.debugging.check_numerics(
-        #     dist_qr_2,
-        #     'Check numerics `dist_qr` in _minkowski distance',
-        #     name='check_minkowski'
-        # )
         return dist_qr_2
 
 
