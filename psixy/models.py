@@ -35,11 +35,9 @@ Notes:
     free parameters
     state
 
-Todo:
+TODO:
     * different optimizers
-    * loss term and humble teacher
-    * Use lazy weight initialization that doesn't require n_sequence
-        on initialization.
+    * smaller batch size
     * Makes sure gradients are being computed correctly.
 
 """
@@ -51,7 +49,7 @@ import time
 import warnings
 
 import numpy as np
-import scipy
+import scipy.optimize
 import tensorflow as tf
 from tensorflow.keras.layers import Layer, Dense, RNN
 from tensorflow import constant_initializer
@@ -281,14 +279,23 @@ class ALCOVE(CategoryLearningModel):
             'lambda_a': .001,
             'lambda_w': .001
         }
+        # self._params = {
+        #     'rho': {'bounds': [1, 10]},
+        #     'tau': {'bounds': [1, 10]},
+        #     'beta': {'bounds': [1, 100]},
+        #     'gamma': {'bounds': [0, 1]},
+        #     'phi': {'bounds': [0, 100]},
+        #     'lambda_a': {'bounds': [0, 10]},
+        #     'lambda_w': {'bounds': [0, 10]}
+        # }
         self._params = {
-            'rho': {'bounds': [1, 1]},
-            'tau': {'bounds': [1, 1]},
-            'beta': {'bounds': [1, 100]},
-            'gamma': {'bounds': [0, 0]},
-            'phi': {'bounds': [0, 100]},
-            'lambda_a': {'bounds': [0, 10]},
-            'lambda_w': {'bounds': [0, 10]}
+            'rho': {'bounds': [1, 1]},  # TODO problem when not 1, problem from elsewhere too
+            'tau': {'bounds': [1, 2]},
+            'beta': {'bounds': [1, 10]},
+            'gamma': {'bounds': [0, 1]},
+            'phi': {'bounds': [0, 10]},
+            'lambda_a': {'bounds': [0, 1]},
+            'lambda_w': {'bounds': [0, 1]}
         }
 
         # State variables.
@@ -329,6 +336,10 @@ class ALCOVE(CategoryLearningModel):
         batch_size = stimulus_sequence.n_sequence  # TODO
         buffer_size = 10000
 
+        # TODO put in options
+        options = {}
+        options['n_restart'] = 10
+
         # Prepare dataset.
         inputs = self._prepare_inputs(stimulus_sequence)
         targets = self._prepare_targets(behavior_sequence)
@@ -337,11 +348,10 @@ class ALCOVE(CategoryLearningModel):
             batch_size, drop_remainder=True
         )
 
-        theta = self._get_theta(self.params)  # TODO
+        theta = self._get_theta(self.params)
         model = self._build_tf_model(theta, batch_size)
-        # model_parameters = list(theta.values())  # TODO DELETE?
 
-        loss_train = self.evaluate(stimulus_sequence, behavior_sequence)
+        loss_train = self._loss(dataset, model).numpy()
         beat_initialization = False
 
         if verbose > 0:
@@ -350,16 +360,10 @@ class ALCOVE(CategoryLearningModel):
             print('')
 
         for i_restart in range(options['n_restart']):
-            # Random initialization of variables (with bounds and trainable settings appropriately set).  TODO
-
             # Perform optimization restart.
-            curr_loss_train, curr_params = self._fit_restart(dataset, model)
-
-            if verbose > 1:
-                print('Restart {0}'.format(i_restart))
-                print('  loss: {0:.2f} | iterations: {1}'.format(res.fun, res.nit))
-                print('  exit mode: {0} | {1}'.format(res.status, res.message))
-                print('')
+            curr_loss_train, curr_params = self._fit_restart(
+                i_restart, dataset, model, verbose
+            )
 
             if curr_loss_train < loss_train:
                 beat_initialization = True
@@ -387,7 +391,8 @@ class ALCOVE(CategoryLearningModel):
         Arguments:
             stimulus_sequence. A psixy.sequence.StimulusSequence
                 object.
-            group_id: TODO
+            group_id: TODO This information is usually in the behavior
+                sequence.
             mode: Determines which response probabilities to return.
                 Can be 'all' or 'correct'. If 'all', then response
                 probabilities for all output categories will be
@@ -401,8 +406,7 @@ class ALCOVE(CategoryLearningModel):
 
         """
         # Settings
-        batch_size = stimulus_sequence.n_sequence  # TODO Handle other sizes.
-        buffer_size = 10000
+        batch_size = stimulus_sequence.n_sequence
 
         # Prepare dataset.
         inputs = self._prepare_inputs(stimulus_sequence)
@@ -422,7 +426,9 @@ class ALCOVE(CategoryLearningModel):
         prob_response = tf.math.softmax(logit_response, axis=2)
 
         if mode == 'correct':
-            stimuli_labels = self._convert_class_id(stimulus_sequence.class_id)
+            stimuli_labels = self._convert_external_class_id(
+                stimulus_sequence.class_id
+            )
             stimuli_labels_one_hot = tf.one_hot(
                 stimuli_labels, self.n_output, axis=2
             )
@@ -440,31 +446,83 @@ class ALCOVE(CategoryLearningModel):
         # TODO should I return the model state as well?
         return res.numpy()
 
-    def _fit_restart(self, dataset, model):
-        """Fit restart."""
-        def objective_func(dataset):
-            for (i_batch, (input_batch, target_batch)) in enumerate(dataset):
-                logit_response_batch = model(input_batch)
-                loss = tf.keras.losses.categorical_crossentropy(
-                    target_batch, logit_response_batch, from_logits=True
-                )
-                # prob_response = tf.math.softmax(logit_response_batch, axis=2)
-                # prob_response_correct = prob_response * target_batch
-                # prob_response_correct = tf.reduce_sum(
-                #     prob_response_correct, axis=2
-                # )
-                # loss = prob_response_correct
-                # loss = tf.reduce_sum(tf.math.log(prob_response_correct))
-                # loss = tf.reduce_mean(loss, axis=1)
-                # loss = tf.reduce_mean(loss, axis=0)
-                loss = tf.reduce_mean(loss)
-            return loss  # TODO average over batches
+    def _loss(self, dataset, model):
+        """Compute loss"""
+        # TODO This logic will break with other batch sizes.
+        for (input_batch, target_batch) in dataset:
+            logit_response_batch = model(input_batch)
+            loss = tf.keras.losses.categorical_crossentropy(
+                target_batch, logit_response_batch, from_logits=True
+            )
+            # TODO should this be a double mean (across trials, then subjects)
+            loss = tf.reduce_mean(loss)
+        return loss
 
-        # TODO
+    def _fit_restart(self, i_restart, dataset, model, verbose):
+        """Fit restart."""
+        # Random initialization of variables (with bounds and trainable settings appropriately set).  TODO
+        def objective_func(x):
+            # TODO this is brittle.
+            model.variables[0].assign(x[6])
+            model.variables[1].assign(x[5])
+            model.variables[2].assign(x[4])
+            model.variables[3].assign(x[2])
+            model.variables[4].assign(x[3])
+            model.variables[5].assign(x[0])
+            model.variables[6].assign(x[1])
+            loss = self._loss(dataset, model)
+            print(
+                '   loss: {0:.2f} | rho: {1:.2f} | tau: {2:.2f} | '
+                'beta: {3:.2f} | gamma: {4:.2f} | phi: {5:.2f} | '
+                'lambda_w: {6:.3f} | lambda_a: {7:.3f}'.format(
+                    loss, x[0], x[1], x[2], x[3], x[4], x[5], x[6]
+                )
+            )
+            return loss
+
+        params0 = self._rand_param()
+        bnds = self._get_bnds()
+        # SLSQP L-BFGS-B
+        res = scipy.optimize.minimize(
+            objective_func, params0, method='L-BFGS-B', bounds=bnds,
+            options={'disp': False}
+        )
+
+        if verbose > 1:
+            print('Restart {0}'.format(i_restart))
+            print(
+                '  loss: {0:.2f} | iterations: {1}'.format(
+                    res.fun, res.nit
+                )
+            )
+            print('  exit mode: {0} | {1}'.format(res.status, res.message))
+            print('')
 
         loss_train = res.fun
         params = res.x
         return loss_train, params
+
+    def _rand_param(self):
+        """Randomly sample parameter setting."""
+        param_0 = []
+        for bnd_set in self._get_bnds():
+            start = bnd_set[0]
+            width = bnd_set[1] - bnd_set[0]
+            param_0.append(start + (np.random.rand(1)[0] * width))
+        return param_0
+
+    def _get_bnds(self):
+        """Return bounds."""
+        bnds = [
+            self._params['rho']['bounds'],
+            self._params['tau']['bounds'],
+            self._params['beta']['bounds'],
+            self._params['gamma']['bounds'],
+            self._params['phi']['bounds'],
+            self._params['lambda_w']['bounds'],
+            self._params['lambda_a']['bounds'],
+        ]
+        return bnds
 
     def _prepare_inputs(self, stimulus_sequence):
         """Prepare inputs for TensorFlow model."""
@@ -472,9 +530,11 @@ class ALCOVE(CategoryLearningModel):
         # [n_sequence, n_trial, n_dim]
         stimulus_z = stimulus_z.astype(dtype=K.floatx())
         # [n_sequence, n_output]
-        stimulus_labels = self._convert_class_id(stimulus_sequence.class_id)
+        stimulus_class_indices = self._convert_external_class_id(
+            stimulus_sequence.class_id
+        )
         stimulus_labels_one_hot = tf.one_hot(
-            stimulus_labels, self.n_output, axis=2
+            stimulus_class_indices, self.n_output, axis=2
         )
         inputs = {'0': stimulus_z, '1': stimulus_labels_one_hot}
         return inputs
@@ -482,12 +542,13 @@ class ALCOVE(CategoryLearningModel):
     def _prepare_targets(self, behavior_sequence):
         """Prepare targets."""
         # [n_sequence, n_output]
-        behavior_labels = self._convert_class_id(behavior_sequence.class_id)
-        behavior_labels_one_hot = tf.one_hot(
-            behavior_labels, self.n_output, axis=2
+        behavior_class_indices = self._convert_external_class_id(
+            behavior_sequence.class_id
         )
-        targets = behavior_labels_one_hot
-        return targets
+        behavior_labels_one_hot = tf.one_hot(
+            behavior_class_indices, self.n_output, axis=2
+        )
+        return behavior_labels_one_hot
 
     def _build_tf_model(self, theta, batch_size):
         """Build tensorflow RNN model.
@@ -507,11 +568,8 @@ class ALCOVE(CategoryLearningModel):
         )
         initial_states = [attention, association]
 
-        # Define inputs.
-        # Full shape information.
-        # inp_1 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_dim))
-        # inp_1 = tf.keras.Input(batch_shape=(batch_size, n_timestep, n_dim))
-        # Partial shape information.
+        # Define inputs. full shape=(batch_size, n_timestep, n_dim)
+        # Partial shape information (if using stateful=True).
         # inp_1 = tf.keras.Input(batch_shape=(batch_size, None, self.n_dim))
         # inp_2 = tf.keras.Input(batch_shape=(batch_size, None, self.n_output))
         # Minimal shape information.
@@ -531,7 +589,7 @@ class ALCOVE(CategoryLearningModel):
 
         return model
 
-    def _convert_class_id(self, class_id_array):
+    def _convert_external_class_id(self, class_id_array):
         """Convert external class IDs to internal class indices."""
         class_idx_array = np.zeros(class_id_array.shape, dtype=int)
         for class_id, class_idx in self.class_id_idx_map.items():
@@ -673,7 +731,10 @@ class ALCOVECell(Layer):
 
         # Use TensorFlow gradients to update model state.
         state_variables = [attention, association]
-        with tf.GradientTape(watch_accessed_variables=False, persistent=True) as state_tape:
+        state_tape = tf.GradientTape(
+            watch_accessed_variables=False, persistent=True
+        )
+        with state_tape:
             state_tape.watch(state_variables)
             # Compute RBF activations.
             d = self.rbf(z_in, attention)
