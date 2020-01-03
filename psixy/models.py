@@ -190,6 +190,211 @@ class CategoryLearningModel(object):
         pass
 
 
+class GCM(CategoryLearningModel):
+    """The Generalized Context Model (GCM).
+
+    Attributes: TODO
+
+    Methods: TODO
+        fit:
+        predict:
+        evaluate:
+
+    Assumes:
+        One group level that indicates the individual.
+
+    References:
+    [1] Nosofsky, R. M. (1986). Attention, similarity, and the
+        identification-categorization relationship. Journal of
+        Experimental Psychology: General, 115, 39–57.
+    [2] Nosofsky, R. M. (2011). The generalized context model: An
+        exemplar model of classification. In E. Pothos & A. Wills
+        (Eds.), Formal approaches in categorization (pp. 18–39). New
+        York, NY: Cambridge University Press.
+
+    # TODO really want 1992 paper that formalizes recency weighted
+    # memory.
+
+    [3] McKinley , S. C. , & Nosofsky , R. M. (1995). Investigations of
+        exemplar and decision bound models in large, ill-defined
+        category structures . Journal of Experimental Psychology: Human
+        Perception and Performance , 21 , 128 –148.
+
+    """
+
+    def __init__(self, rbf_nodes, output_classes, encoder, verbose=0):
+        """Initialize.
+
+        Arguments:
+            rbf_nodes: A 2D NumPy array denoting the location of the
+                RBF hidden nodes in psychological space. Each row
+                corresponds to the representation of a single stimulus.
+                Each column corresponds to a distinct feature
+                dimension.
+            output_classes: A 1D NumPy integer array of unique class
+                ID's. The order of this list determines the output
+                order of the model.
+            encoder: A psixy.models.Encoder object.
+            verbose (optional): Verbosity of output.
+
+        """
+        self.encoder = encoder
+
+        # At initialization, GCM must know the locations of the RBFs.
+        self.rbf_nodes = rbf_nodes.astype(dtype=K.floatx())
+        self.n_rbf = rbf_nodes.shape[0]
+        self.n_dim = rbf_nodes.shape[1]
+
+        # At initialization, GCM must know the possible output classes.
+        # Create a mapping between external (i.e., user-defined) class ID's
+        # and internally used class indices.
+        output_classes = self._check_output_classes(output_classes)
+        self.n_output = output_classes.shape[0]
+        self.class_id_idx_map = {}
+        for class_idx in range(self.n_output):
+            self.class_id_idx_map[output_classes[class_idx]] = class_idx
+
+        # delta: memory decay
+        # Free parameters.
+        self.params = {
+            'rho': 2.0,
+            'tau': 1.0,
+            'beta': 1.0,
+            'gamma': 0.0,
+            'phi': 1.0,
+            'delta': 0.0
+        }
+
+        # TODO bounds
+
+        if verbose > 0:
+            print('ALCOVE initialized')
+            print('  Input dimension: ', self.n_dim)
+            print('  Number of RBF nodes: ', self.n_rbf)
+            print('  Number of output classes: ', self.n_output)
+
+    def fit(
+            self, stimulus_sequence, behavior_sequence, options=None,
+            verbose=0):
+        """Fit free parameters of model.
+
+        Arguments:
+            stimulus_sequence: A psixy.sequence.StimulusSequence object.
+            behavior_sequence: A psixy.sequence.BehaviorSequence object.
+            options (optional): A dictionary of optimization options.
+                n_restart (10): Number of indpendent restarts to use
+                    when fitting the free parameters.
+
+        Returns:
+            loss_train: The negative log-likelihood of the data given
+                the fitted model.
+
+        """
+        # TODO
+
+    def predict(
+            self, stimulus_sequence, group_id=None, mode='all',
+            verbose=0):
+        """Predict behavior.
+
+        Arguments:
+            stimulus_sequence. A psixy.sequence.StimulusSequence
+                object.
+            group_id: TODO This information is usually in the behavior
+                sequence.
+            mode: Determines which response probabilities to return.
+                Can be 'all' or 'correct'. If 'all', then response
+                probabilities for all output categories will be
+                returned. If 'correct', only returns the response
+                probabilities for the the correct category.
+            verbose: Integer indicating verbosity of outout.
+
+        Returns:
+            res: A Tensorflow.Tensor object containing response
+                probabilities. TODO
+
+        """
+        # TODO
+
+    def _compute_relative_frequency(self, stimulus_sequence):
+        """Compute relative frequency.
+
+        Determine the relative frequency that each exemplar is taught
+        as a particular category.
+
+        Arguments:
+            stimulus_sequence
+
+        Returns:
+            rel_freq
+
+        """
+        # TODO
+        # only use study stimuli.
+
+
+class GCMCell(Layer):
+    """A GCM cell."""
+
+    def __init__(self, theta, rbf_nodes, association, bias, **kwargs):
+        """Initialize.
+
+        Arguments:
+            theta:
+            rbf_nodes:
+            n_output:
+
+        """
+        self.theta = theta
+        n_rbf = rbf_nodes.shape[0]
+        n_dim = rbf_nodes.shape[1]
+        self.rbf = MinkowskiRBF(rbf_nodes, theta['rho'])
+        self.association = association  # TODO association matrix must be computed separately for each sequence, i.e. batch.
+        self.bias = bias  # TODO bias matrix must be computed separately for each sequence, i.e. batch.
+        super(GCMCell, self).__init__(**kwargs)
+
+    def call(self, inputs, states):
+        """Call.
+
+        Arguments:
+            inputs: Expect inputs to contain 2 items:
+                z: shape=(batch, n_dim)
+                one_hot_label: shape=(batch, n_output)]
+
+        """
+        z_in, one_hot_label = tf.nest.flatten(inputs)  # TODO pass in trial type. Don't need one_hot for this model, but just keep it for simplicity.
+        exemplar_lag = states[0]  # Previous memory state.
+
+        # Update exemplar lag and compute memory.
+        exemplar_lag = exemplar_lag + 1.0
+        exemplar_lag[current_exemplar_idx] = 0  # TODO Is this correct? Need to have state for each sequence/batch
+        exemplar_memory = tf.exp(
+            tf.multiply(tf.negative(self.theta['delta']), exemplar_lag)
+        )
+
+        # Compute RBF activations.
+        d = self.rbf(z_in, self.theta['attention'])
+        s = tf.exp(
+            tf.negative(self.theta['beta']) * tf.pow(d, self.theta['tau'])
+        ) + self.theta['gamma']
+
+        # Multiply exemplar similarity by exemplar memory strength.
+        s = tf.multiply(exemplar_memory, s)  # TODO Is this correct? Correct shape for memory?
+
+        # Compute output activations.
+        # Convert to shape=(batch_size, n_rbf, n_output)
+        s2 = tf.expand_dims(s, axis=2)
+        x2 = tf.multiply(s2, self.association)
+        x_out = tf.reduce_sum(x2, axis=1)
+
+        # Response rule (keep as logits).
+        x_out_scaled = tf.exp(x_out, self.theta['phi'])
+        # Multiply by category bias. TODO
+
+        new_state = [exemplar_lag]
+        return x_out_scaled, new_state
+
+
 class ALCOVE(CategoryLearningModel):
     """ALCOVE category learning model (Kruschke, 1992).
 
@@ -212,7 +417,7 @@ class ALCOVE(CategoryLearningModel):
             attention:
             association:
 
-    Methods:
+    Methods: TODO
         fit:
         predict:
         evaluate:
@@ -447,7 +652,7 @@ class ALCOVE(CategoryLearningModel):
         return res.numpy()
 
     def _loss(self, dataset, model):
-        """Compute loss"""
+        """Compute loss."""
         # TODO This logic will break with other batch sizes.
         for (input_batch, target_batch) in dataset:
             logit_response_batch = model(input_batch)
