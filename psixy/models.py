@@ -1,6 +1,6 @@
 
 # -*- coding: utf-8 -*-
-# Copyright 2019 The PsiXy Authors. All Rights Reserved.
+# Copyright 2020 The PsiXy Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -350,7 +350,7 @@ class GCMCell(Layer):
         n_dim = rbf_nodes.shape[1]
         self.rbf = MinkowskiRBF(rbf_nodes, theta['rho'])
         self.association = association  # TODO association matrix must be computed separately for each sequence, i.e. batch.
-        self.bias = bias  # TODO bias matrix must be computed separately for each sequence, i.e. batch.
+        self.bias = bias  # TODO bias array must be computed separately for each sequence, i.e. batch.
         super(GCMCell, self).__init__(**kwargs)
 
     def call(self, inputs, states):
@@ -362,7 +362,7 @@ class GCMCell(Layer):
                 one_hot_label: shape=(batch, n_output)]
 
         """
-        z_in, one_hot_label = tf.nest.flatten(inputs)  # TODO pass in trial type. Don't need one_hot for this model, but just keep it for simplicity.
+        z_in, one_hot_label = tf.nest.flatten(inputs)  # TODO Also pass in group_id and trial type. Don't need group_id and one_hot for this model, but just keep it for simplicity.
         exemplar_lag = states[0]  # Previous memory state.
 
         # Update exemplar lag and compute memory.

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright 2019 The PsiXy Authors. All Rights Reserved.
+# Copyright 2020 The PsiXy Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -215,6 +215,10 @@ def shepard_hovland_jenkins_1961():
         [1, 1, 0],
         [1, 1, 1],
     ])
+
+    # TODO maybe return the encoder, still need the feature matrix
+    # for RBF model initialization.
+    # encoder = psixy.models.Deterministic(stimulus_id, feature_matrix)
 
     return task_list, feature_matrix
 
