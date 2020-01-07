@@ -184,6 +184,7 @@ def shepard_hovland_jenkins_1961():
             https://doi.org/10.1037/h0093825
 
     """
+    # Placeholder filepaths.
     filepath = [
         '0.jpg', '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6.jpg', '7.jpg'
     ]
@@ -235,6 +236,7 @@ def kruschke_rules_and_exceptions():
             http://dx.doi.org/10.1037/0033-295X.99.1.22.
 
     """
+    # Placeholder filepaths.
     filepath = [
         '0.jpg', '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6jpg',
         '7.jpg', '8.jpg', '9.jpg', '10.jpg', '11.jpg', '12.jpg', '13.jpg'
@@ -267,3 +269,70 @@ def kruschke_rules_and_exceptions():
         'A_e', 'B_6', 'B_5', 'B_4', 'B_3', 'B_2', 'B_1',
     ])
     return task, feature_matrix, stimulus_label
+
+
+def nosofsky_1986():
+    """Category structure used in [1].
+
+    There are three category structures: dimensional, criss-cross,
+    interior-exterior, and diagonal.
+
+    References:
+    [1] Nosofsky, R. M. (1986). Attention, similarity, and the
+        identification-categorization relationship. Journal of
+        Experimental Psychology: General, 115, 39–57.
+
+    """
+    # Placeholder filepaths.
+    filepath = [
+        '0.jpg', '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6jpg',
+        '7.jpg', '8.jpg', '9.jpg', '10.jpg', '11.jpg', '12.jpg', '13.jpg'
+    ]
+    stimulus_id = np.arange(len(filepath))
+    catalog = psixy.catalog.Catalog(filepath, stimulus_id=stimulus_id)
+
+    name_list = [
+        'Dimensional', 'Criss-Cross', 'Interior-Exterior', 'Diagonal'
+    ]
+    # See Figure 3 [1]. Stimuli are listed left to right, bottom to top in
+    # order to start at coordinate (1,1). Class membership of transfer stimuli
+    # is determined by using the ideal case, not by Figure 8 [1].
+    is_train = np.array([
+        [1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1],
+        [1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1],
+        [0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 0, 0],
+        [0, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0]
+    ], dtype=bool)
+    class_id = np.array([
+        [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2],
+        [2, 2, 1, 1, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 2, 2],
+        [2, 2, 2, 2, 2, 1, 1, 2, 2, 1, 1, 2, 2, 2, 2, 2],
+        [1, 1, 1, 2, 1, 1, 1, 2, 1, 2, 2, 2, 1, 2, 2, 2]
+    ], dtype=int)
+    task_list = []
+    for idx, name in enumerate(name_list):
+        task_list.append(
+            Task(catalog, class_id[idx], name=name)
+        )
+
+    # Subject 1 (Table 2 [1]).
+    feature_matrix = np.array([
+        [-1.855, -1.532],
+        [-0.687, -1.617],
+        [0.436, -1.633],
+        [1.331, -1.647],
+        [-1.615, -0.469],
+        [-0.531, -0.558],
+        [0.500, -0.590],
+        [1.373, -0.535],
+        [-1.522, 0.657],
+        [-0.395, 0.518],
+        [0.648, 0.469],
+        [1.513, 0.481],
+        [-1.427, 1.770],
+        [-0.301, 1.639],
+        [0.767, 1.541],
+        [1.764, 1.512],
+    ])
+
+    return task_list, feature_matrix
