@@ -31,6 +31,7 @@ Todo:
     * change `is_feedback` to `feedback` which allows for more than two
     levels (yes/no).
     * `kind` as a catch all to be used/abused in what ever way the user wants
+    * implement `load_sequence`
     * MAYBE `kind` shape=(n_sequence, n_trial, n_level)
     * MAYBE Allow for list of lists in response times?
 
@@ -341,7 +342,7 @@ class AFCSequence(BehaviorSequence):
 
 
 class ObservationSequence(object):
-    """Class for containing a sequence of stimulus and behavior."""
+    """Class for zipping a stimulus and behavior sequence."""
 
     def __init__(self, stimulus_sequence, behavior_sequence):
         """Initialize.
@@ -500,6 +501,7 @@ def pad_trial(x, n_trial_max, postpend=True):
         else:
             x = np.concatenate([x_pad, x], axis=1)
     return x
+
 
 # def load_sequence(filepath, verbose=0):
 #     """Load sequence saved via the save method.
