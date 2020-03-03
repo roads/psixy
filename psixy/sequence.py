@@ -21,7 +21,6 @@ Classes:
     StimulusSequence: TODO
     BehaviorSequence: TODO
     AFCSequence: TODO
-    ObservationSequence: TODO
 
 Functions:
     stack: Stack sequences.
@@ -32,7 +31,11 @@ Todo:
     levels (yes/no).
     * `kind` as a catch all to be used/abused in what ever way the user wants
     * implement `load_sequence`
+    * test: group_id is composed of integers
+    * test: stack of stimulus seq
+    * test: stack of behavior seq
     * MAYBE `kind` shape=(n_sequence, n_trial, n_level)
+    * MAYBE `group_id` shape=(n_sequence, n_trial, n_level)
     * MAYBE Allow for list of lists in response times?
 
 """
@@ -87,6 +90,7 @@ class StimulusSequence(TrialSequence):
                 type of trial. This information is useful for grabbing
                 subsets of the sequence.
                 shape=(n_sequence, n_trial)
+            mask (optional): TODO
 
         """
         self.stimulus_id = self._check_stimulus_id(stimulus_id)
@@ -341,55 +345,6 @@ class AFCSequence(BehaviorSequence):
         return obj
 
 
-class ObservationSequence(object):
-    """Class for zipping a stimulus and behavior sequence."""
-
-    def __init__(self, stimulus_sequence, behavior_sequence):
-        """Initialize.
-
-        Arguments:
-            stimulus_sequence: A psixy.sequence.StimulusSequence
-                object.
-            behavior_sequence: A psixy.sequence.BehaviorSequence
-                object.
-
-        """
-        if not stimulus_sequence.n_trial == behavior_sequence.n_trial:
-            raise ValueError((
-                "The argument `stimulus_sequence` and `behavior_sequence` "
-                "must have the same number of trials."
-            ))
-        self.n_trial = stimulus_sequence.n_trial
-        self.stimuli = stimulus_sequence
-        self.behavior = behavior_sequence
-
-    def split(self):
-        """Split sequence into stimulus and behavior."""
-        return self.stimuli, self.behavior
-
-    def is_correct(self):
-        """Determine if each trial is correct."""
-        return np.equal(self.stimuli.class_id, self.behavior.class_id)
-
-    def accuracy(self, idx=None):
-        """Determine accuracy of sequence."""
-        is_correct = self.is_correct()
-        if idx is not None:
-            is_correct = is_correct[idx]
-        acc = np.sum(is_correct) / len(is_correct)
-        return acc
-
-    def save(obj):
-        """Save method for pickle."""
-        return (obj.__class__, obj.__dict__)
-
-    def load(cls, attributes):
-        """Load method for pickle."""
-        obj = cls.__new__(cls)
-        obj.__dict__.update(attributes)
-        return obj
-
-
 def stack(seq_list, postpend=True):
     """Combine StimulusSequence objects.
 
@@ -464,12 +419,12 @@ def stack(seq_list, postpend=True):
             kind = np.concatenate(
                 [kind, curr_kind], axis=0
             )
-        # TODO update to new signature
         seq = StimulusSequence(
             stimulus_id, class_id, is_feedback=is_feedback, kind=kind,
             mask=mask
         )
     else:
+        # TODO must handle different types and additional info
         for i_seq in seq_list[1:]:
             curr_class_id = pad_trial(
                 i_seq.class_id, max_n_trial, postpend=postpend
