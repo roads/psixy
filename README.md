@@ -1,4 +1,4 @@
-# PsiXy: A Psychological Category Learning Package
+# PsiXy: A Psychological Category Learning Package (alpha release)
 
 ## Purpose
 PsiXy provides the computational tools to model human category learning.
@@ -12,9 +12,10 @@ There are two ways to install PsiXy:
 PsiXy also requires TensorFlow, which is not installed automatically since users will want to specify whether they use a GPU enabled version of TensorFlow.
 
 ## Quick Start
-There is one predefined models to choose from:
+Select a predefined cognitive model:
 
-1. ALCOVE
+1. CGM (in development)
+2. ALCOVE
 
 Once you have selected a model, you must provide TODO pieces of information in order to fit the model.
 
@@ -48,12 +49,10 @@ In the simplest case, an observation is obtained from a trial consisting of TODO
 
 ## Authors
 * Brett D. Roads
-* Michael C. Mozer
-* Bradley C. Love
 * See also the list of contributors who participated in this project.
 
 ## What's in a name?
-The name PsiXy (pronounced *sigh x y*) is meant to serve as shorthard for *psychological category learning*. The greek letter Psi is often used to represent the field of psychology. The matrix variable **X** and vector variable **y** are often used in machine learning to denote a set of input features and labels respectively.
+The name PsiXy (pronounced *sigh x y*) is meant to serve as shorthand for *psychological category learning*. The greek letter Psi is often used to represent the field of psychology. The matrix variable **X** and vector variable **y** are often used in machine learning to denote a set of input features and labels respectively.
 
 ## Licence
 This project is licensed under the Apache Licence 2.0 - see the LICENSE.txt file for details.
