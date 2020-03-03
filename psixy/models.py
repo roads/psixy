@@ -36,6 +36,7 @@ Notes:
     state
 
 TODO:
+    * Encoder that uses group_id?
     * different optimizers
     * smaller batch size
     * Makes sure gradients are being computed correctly.
@@ -211,18 +212,19 @@ class GCM(CategoryLearningModel):
         exemplar model of classification. In E. Pothos & A. Wills
         (Eds.), Formal approaches in categorization (pp. 18–39). New
         York, NY: Cambridge University Press.
-
-    # TODO really want 1992 paper that formalizes recency weighted
-    # memory.
-
     [3] McKinley , S. C. , & Nosofsky , R. M. (1995). Investigations of
         exemplar and decision bound models in large, ill-defined
         category structures . Journal of Experimental Psychology: Human
         Perception and Performance , 21 , 128 –148.
 
+    TODO Probably want the 1992 paper that formalizes recency weighted
+    memory.
+
     """
 
-    def __init__(self, rbf_nodes, output_classes, encoder, verbose=0):
+    def __init__(
+            self, rbf_nodes, output_classes, encoder, association=None,
+            verbose=0):
         """Initialize.
 
         Arguments:
@@ -235,6 +237,12 @@ class GCM(CategoryLearningModel):
                 ID's. The order of this list determines the output
                 order of the model.
             encoder: A psixy.models.Encoder object.
+            association (optional): A 2D NumPy float array indicating
+                the connection weights between the RBF nodes and output
+                classes. If not provided, the association matrix will
+                be derived for each sequence from the relative
+                frequency of the provided training trials. TODO
+                shape=(n_exemplar, n_output)
             verbose (optional): Verbosity of output.
 
         """
@@ -250,25 +258,28 @@ class GCM(CategoryLearningModel):
         # and internally used class indices.
         output_classes = self._check_output_classes(output_classes)
         self.n_output = output_classes.shape[0]
-        self.class_id_idx_map = {}
-        for class_idx in range(self.n_output):
-            self.class_id_idx_map[output_classes[class_idx]] = class_idx
+        self.class_id_idx_map = _assemble_id_idx_map(output_classes)
 
+        self.association = association
         # delta: memory decay
+        # alpha: attention
+        # kappa: bias
         # Free parameters.
         self.params = {
-            'rho': 2.0,
+            'rho': 1.0,
             'tau': 1.0,
             'beta': 1.0,
             'gamma': 0.0,
             'phi': 1.0,
+            'alpha': np.ones(self.n_dim) / self.n_dim,
+            'kappa': np.ones(self.n_dim) / self.n_dim,
             'delta': 0.0
         }
 
         # TODO bounds
 
         if verbose > 0:
-            print('ALCOVE initialized')
+            print('GCM initialized')
             print('  Input dimension: ', self.n_dim)
             print('  Number of RBF nodes: ', self.n_rbf)
             print('  Number of output classes: ', self.n_output)
@@ -300,8 +311,10 @@ class GCM(CategoryLearningModel):
         Arguments:
             stimulus_sequence. A psixy.sequence.StimulusSequence
                 object.
-            group_id: TODO This information is usually in the behavior
-                sequence.
+            group_id: This information is usually contained in the
+                behavior sequence, but must be provided here to make
+                appropriate predictions.
+                shape=(n_sequence, n_trial, n_level)
             mode: Determines which response probabilities to return.
                 Can be 'all' or 'correct'. If 'all', then response
                 probabilities for all output categories will be
@@ -314,7 +327,46 @@ class GCM(CategoryLearningModel):
                 probabilities. TODO
 
         """
-        # TODO
+        # Settings
+        batch_size = stimulus_sequence.n_sequence
+
+        # Prepare dataset.
+        inputs = self._prepare_inputs(stimulus_sequence)
+        seq_dataset = tf.data.Dataset.from_tensor_slices((inputs))
+        # TODO Currently using same batch size for all batches.
+        dataset = seq_dataset.batch(batch_size, drop_remainder=True)
+
+        theta = self._get_theta(self.params)
+        model = self._build_tf_model(theta, batch_size)
+
+        # TODO This logic will break with other batch sizes.
+        for input_batch in dataset.take(1):
+            logit_response_batch = model(input_batch)
+        logit_response = logit_response_batch
+
+        # Convert logits to probabilities.
+        prob_response = tf.math.softmax(logit_response, axis=2)
+
+        if mode == 'correct':
+            stimuli_labels = _convert_external_class_id(
+                stimulus_sequence.class_id, self.class_id_idx_map
+            )
+            stimuli_labels_one_hot = tf.one_hot(
+                stimuli_labels, self.n_output, axis=2
+            )
+            prob_response_correct = prob_response * stimuli_labels_one_hot
+            prob_response_correct = tf.reduce_sum(
+                prob_response_correct, axis=2
+            )
+            res = prob_response_correct
+        elif mode == 'all':
+            res = prob_response
+        else:
+            raise ValueError(
+                'Undefined option {0} for mode argument.'.format(str(mode))
+            )
+        # TODO should I return the model state as well?
+        return res.numpy()
 
     def _compute_relative_frequency(self, stimulus_sequence):
         """Compute relative frequency.
@@ -331,6 +383,134 @@ class GCM(CategoryLearningModel):
         """
         # TODO
         # only use study stimuli.
+
+    def _prepare_inputs(self, stimulus_sequence):
+        """Prepare inputs for TensorFlow model."""
+        stimulus_z = self.encoder.encode(stimulus_sequence.stimulus_id)
+        # [n_sequence, n_trial, n_dim]
+        stimulus_z = stimulus_z.astype(dtype=K.floatx())
+        # [n_sequence, n_output]
+        stimulus_class_indices = _convert_external_class_id(
+            stimulus_sequence.class_id, self.class_id_idx_map
+        )
+        stimulus_labels_one_hot = tf.one_hot(
+            stimulus_class_indices, self.n_output, axis=2
+        )
+        inputs = {'0': stimulus_z, '1': stimulus_labels_one_hot}
+        return inputs
+
+    def _prepare_targets(self, behavior_sequence):
+        """Prepare targets."""
+        # [n_sequence, n_output]
+        behavior_class_indices = _convert_external_class_id(
+            behavior_sequence.class_id, self.class_id_idx_map
+        )
+        behavior_labels_one_hot = tf.one_hot(
+            behavior_class_indices, self.n_output, axis=2
+        )
+        return behavior_labels_one_hot
+
+    def _build_tf_model(self, theta, batch_size):
+        """Build tensorflow RNN model.
+
+        Note if using an RNN with stateful=True, we must also
+        provide the batch_size and call rnn.reset_states().
+
+        """
+        rbf_nodes = self.rbf_nodes.astype(dtype=K.floatx())
+
+        # Define initial state.
+        lag = tf.zeros([batch_size, self.n_rbf], dtype=K.floatx())
+        initial_states = [lag]
+
+        # Define inputs. full shape=(batch_size, n_timestep, n_dim)
+        # Partial shape information (if using stateful=True).
+        # inp_1 = tf.keras.Input(batch_shape=(batch_size, None, self.n_dim))
+        # inp_2 = tf.keras.Input(batch_shape=(batch_size, None, self.n_output))
+        # Minimal shape information.
+        inp_1 = tf.keras.Input(shape=(None, self.n_dim))
+        inp_2 = tf.keras.Input(shape=(None, self.n_output))
+
+        if association is None:
+            # TODO
+            association = None
+
+        bias = np.ones([self.n_output])  # TODO
+
+        # Define RNN.
+        cell = GCMCell(theta, rbf_nodes, association, bias)
+        rnn = tf.keras.layers.RNN(cell, return_sequences=True, stateful=False)
+
+        # Assemble model.
+        output = rnn(
+            NestedInput(z_in=inp_1, one_hot_label=inp_2),
+            initial_state=initial_states
+        )
+        model = tf.keras.models.Model([inp_1, inp_2], output)
+
+        return model
+
+    def _get_theta(self, params_local):
+        """Return theta."""
+        # TODO
+        theta = {
+            'rho': tf.Variable(
+                initial_value=params_local['rho'],
+                trainable=False, constraint=GreaterEqualThan(min_value=1.),
+                dtype=K.floatx(), name='rho'
+            ),
+            'tau': tf.Variable(
+                initial_value=params_local['tau'],
+                trainable=False, constraint=GreaterEqualThan(min_value=1.),
+                dtype=K.floatx(), name='tau'
+            ),
+            'beta': tf.Variable(
+                initial_value=params_local['beta'],
+                trainable=False, constraint=GreaterEqualThan(min_value=1.),
+                dtype=K.floatx(), name='beta'
+            ),
+            'gamma': tf.Variable(
+                initial_value=params_local['gamma'],
+                trainable=False, constraint=NonNeg(),
+                dtype=K.floatx(), name='gamma'
+            ),
+            'phi': tf.Variable(
+                initial_value=params_local['phi'],
+                trainable=True, constraint=NonNeg(),
+                dtype=K.floatx(), name='phi'
+            ),
+            'alpha': tf.Variable(
+                initial_value=params_local['alpha'],
+                trainable=True, constraint=ProjectAttention(),
+                shape=[self.n_dim], dtype=K.floatx(), name='alpha'
+            ),
+            'kappa': tf.Variable(
+                initial_value=params_local['kappa'],
+                trainable=True, constraint=NonNeg(), # TODO convexity constraint?
+                shape=[self.n_dim], dtype=K.floatx(), name='kappa'
+            )
+        }
+        return theta
+
+    def _check_output_classes(self, output_classes):
+        """Check `output_classes` argument."""
+        if not issubclass(output_classes.dtype.type, np.integer):
+            raise ValueError((
+                "The argument `output_classes` must be a 1D NumPy array of "
+                "unique integers. The array you supplied is not composed of "
+                "integers."
+            ))
+
+        # TODO check non-negative?
+
+        if not len(np.unique(output_classes)) == len(output_classes):
+            raise ValueError(
+                "The argument `output_classes` must be a 1D NumPy array of "
+                "unique integers. The array you supplied is not composed of "
+                "unique integers."
+            )
+
+        return output_classes
 
 
 class GCMCell(Layer):
@@ -470,9 +650,7 @@ class ALCOVE(CategoryLearningModel):
         # and internally used class indices.
         output_classes = self._check_output_classes(output_classes)
         self.n_output = output_classes.shape[0]
-        self.class_id_idx_map = {}
-        for class_idx in range(self.n_output):
-            self.class_id_idx_map[output_classes[class_idx]] = class_idx
+        self.class_id_idx_map = _assemble_id_idx_map(output_classes)
 
         # Free parameters.
         self.params = {
@@ -596,8 +774,10 @@ class ALCOVE(CategoryLearningModel):
         Arguments:
             stimulus_sequence. A psixy.sequence.StimulusSequence
                 object.
-            group_id: TODO This information is usually in the behavior
-                sequence.
+            group_id: This information is usually contained in the
+                behavior sequence, but must be provided here to make
+                appropriate predictions.
+                shape=(n_sequence, n_trial, n_level)
             mode: Determines which response probabilities to return.
                 Can be 'all' or 'correct'. If 'all', then response
                 probabilities for all output categories will be
@@ -616,7 +796,7 @@ class ALCOVE(CategoryLearningModel):
         # Prepare dataset.
         inputs = self._prepare_inputs(stimulus_sequence)
         seq_dataset = tf.data.Dataset.from_tensor_slices((inputs))
-        # TODO right now, have to have same batch size for all batches.
+        # TODO Currently using same batch size for all batches.
         dataset = seq_dataset.batch(batch_size, drop_remainder=True)
 
         theta = self._get_theta(self.params)
@@ -631,8 +811,8 @@ class ALCOVE(CategoryLearningModel):
         prob_response = tf.math.softmax(logit_response, axis=2)
 
         if mode == 'correct':
-            stimuli_labels = self._convert_external_class_id(
-                stimulus_sequence.class_id
+            stimuli_labels = _convert_external_class_id(
+                stimulus_sequence.class_id, self.class_id_idx_map
             )
             stimuli_labels_one_hot = tf.one_hot(
                 stimuli_labels, self.n_output, axis=2
@@ -735,8 +915,8 @@ class ALCOVE(CategoryLearningModel):
         # [n_sequence, n_trial, n_dim]
         stimulus_z = stimulus_z.astype(dtype=K.floatx())
         # [n_sequence, n_output]
-        stimulus_class_indices = self._convert_external_class_id(
-            stimulus_sequence.class_id
+        stimulus_class_indices = _convert_external_class_id(
+            stimulus_sequence.class_id, self.class_id_idx_map
         )
         stimulus_labels_one_hot = tf.one_hot(
             stimulus_class_indices, self.n_output, axis=2
@@ -747,8 +927,8 @@ class ALCOVE(CategoryLearningModel):
     def _prepare_targets(self, behavior_sequence):
         """Prepare targets."""
         # [n_sequence, n_output]
-        behavior_class_indices = self._convert_external_class_id(
-            behavior_sequence.class_id
+        behavior_class_indices = _convert_external_class_id(
+            behavior_sequence.class_id, self.class_id_idx_map
         )
         behavior_labels_one_hot = tf.one_hot(
             behavior_class_indices, self.n_output, axis=2
@@ -793,14 +973,6 @@ class ALCOVE(CategoryLearningModel):
         model = tf.keras.models.Model([inp_1, inp_2], output)
 
         return model
-
-    def _convert_external_class_id(self, class_id_array):
-        """Convert external class IDs to internal class indices."""
-        class_idx_array = np.zeros(class_id_array.shape, dtype=int)
-        for class_id, class_idx in self.class_id_idx_map.items():
-            locs = np.equal(class_id_array, class_id)
-            class_idx_array[locs] = class_idx
-        return class_idx_array
 
     def _get_theta(self, params_local):
         """Return theta."""
@@ -855,25 +1027,25 @@ class ALCOVE(CategoryLearningModel):
         }
         return theta
 
-    def _check_output_classes(self, class_id):
-        """Check `class_id` argument."""
-        if not issubclass(class_id.dtype.type, np.integer):
+    def _check_output_classes(self, output_classes):
+        """Check `output_classes` argument."""
+        if not issubclass(output_classes.dtype.type, np.integer):
             raise ValueError((
-                "The argument `class_id` must be a 1D NumPy array of "
-                "unique integers. The array you supplied is not "
-                "composed of integers."
+                "The argument `output_classes` must be a 1D NumPy array of "
+                "unique integers. The array you supplied is not composed of "
+                "integers."
             ))
 
         # TODO check non-negative?
 
-        if not len(np.unique(class_id)) == len(class_id):
+        if not len(np.unique(output_classes)) == len(output_classes):
             raise ValueError(
-                "The argument `class_id` must be a 1D NumPy array of "
-                "unique integers. The array you supplied is not "
-                "composed of unique integers."
+                "The argument `output_classes` must be a 1D NumPy array of "
+                "unique integers. The array you supplied is not composed of "
+                "unique integers."
             )
 
-        return class_id
+        return output_classes
 
 
 # @tf.function
@@ -1082,3 +1254,40 @@ def determine_class_loc(class_id, output_class_id):
         loc_class[locs, idx] = True
     loc_class = np.swapaxes(loc_class, 1, 2)
     return loc_class
+
+
+def _assemble_id_idx_map(output_classes):
+    """TODO."""
+    n_output = output_classes.shape[0]
+    class_id_idx_map = {}
+    for class_idx in range(n_output):
+        class_id_idx_map[output_classes[class_idx]] = class_idx
+    return class_id_idx_map
+
+
+def _convert_external_class_id(class_id_array, class_id_idx_map):
+    """Convert external class IDs to internal class indices."""
+    class_idx_array = np.zeros(class_id_array.shape, dtype=int)
+    for class_id, class_idx in class_id_idx_map.items():
+        locs = np.equal(class_id_array, class_id)
+        class_idx_array[locs] = class_idx
+    return class_idx_array
+
+
+# TODO fix so that sums to one.
+class ProjectAttention(Constraint):
+    """Return projection of attention weights."""
+
+    def __init__(self):
+        """Initialize."""
+
+    def __call__(self, tf_attention_0):
+        """Call."""
+        n_dim = tf.shape(tf_attention_0, out_type=K.floatx())[1]
+        tf_attention_1 = tf.divide(
+            tf.reduce_sum(tf_attention_0, axis=1, keepdims=True), n_dim
+        )
+        tf_attention_proj = tf.divide(
+            tf_attention_0, tf_attention_1
+        )
+        return tf_attention_proj
