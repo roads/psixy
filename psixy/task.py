@@ -285,8 +285,9 @@ def nosofsky_1986():
     """
     # Placeholder filepaths.
     filepath = [
-        '0.jpg', '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6jpg',
-        '7.jpg', '8.jpg', '9.jpg', '10.jpg', '11.jpg', '12.jpg', '13.jpg'
+        '1.jpg', '2.jpg', '3.jpg', '4.jpg', '5.jpg', '6jpg',
+        '7.jpg', '8.jpg', '9.jpg', '10.jpg', '11.jpg', '12.jpg',
+        '13.jpg', '14.jpg', '15.jpg', '16.jpg',
     ]
     stimulus_id = np.arange(len(filepath))
     catalog = psixy.catalog.Catalog(filepath, stimulus_id=stimulus_id)
@@ -296,7 +297,7 @@ def nosofsky_1986():
     ]
     # See Figure 3 [1]. Stimuli are listed left to right, bottom to top in
     # order to start at coordinate (1,1). Class membership of transfer stimuli
-    # is determined by using the ideal case, not by Figure 8 [1].
+    # is determined by using the ideal case, not by Figure 8 [1]. TODO
     is_train = np.array([
         [1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1],
         [1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1],
@@ -316,7 +317,7 @@ def nosofsky_1986():
         )
 
     # Subject 1 (Table 2 [1]).
-    feature_matrix = np.array([
+    feature_matrix_1 = np.array([
         [-1.855, -1.532],
         [-0.687, -1.617],
         [0.436, -1.633],
@@ -332,7 +333,27 @@ def nosofsky_1986():
         [-1.427, 1.770],
         [-0.301, 1.639],
         [0.767, 1.541],
-        [1.764, 1.512],
+        [1.764, 1.512]
     ])
 
-    return task_list, feature_matrix
+    feature_matrix_2 = np.array([
+        [-1.356, -1.430],
+        [-0.492, -1.211],
+        [0.349, -1.235],
+        [1.088, -1.121],
+        [-1.413, -0.528],
+        [-0.412, -0.425],
+        [0.518, -0.382],
+        [1.275, -0.215],
+        [-1.477, 0.302],
+        [-0.388, 0.294],
+        [0.607, 0.368],
+        [1.317, 0.539],
+        [-1.389, 1.189],
+        [-0.313, 1.153],
+        [0.673, 1.187],
+        [1.414, 1.518]
+    ])
+
+    feature_matrix_list = [feature_matrix_1, feature_matrix_2]
+    return task_list, feature_matrix_list
