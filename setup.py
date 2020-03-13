@@ -9,7 +9,7 @@ setuptools.setup(
     name='psixy',
     version='0.1.0',
     description='Toolbox for fitting psychological category learning models.',
-    long_description=readme(),
+    long_description=long_description,
     long_description_content_type="text/markdown",
     classifiers=[
         'Programming Language :: Python :: 3',
@@ -20,7 +20,7 @@ setuptools.setup(
     packages=['psixy'],
     python_requires='>=3, <3.8',
     install_requires=[
-        'tensorflow-nightly', 'tensorflow-probability', 'numpy', 'scipy',
+        'tf-nightly', 'tensorflow-probability', 'numpy', 'scipy',
         'pandas', 'scikit-learn', 'h5py', 'matplotlib'
     ],
     include_package_data=True,
